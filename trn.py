@@ -108,7 +108,7 @@ def reconstruir_w_y_calcular_sse(w, epsilon_hat, K_a, L_A, L_M, eta_hat):
     return sse, n_eval
 
 def grid_search_sarima(w, p_max, q_max, P_max, Q_max, s, K_a, lam):
-    """Itera combinaciones minimizando AIC vía OLS-Penalizado."""
+    """Itera combinaciones minimizando AIC vía OLS."""
     Gamma_hat, epsilon_hat = sarima_fase_1(w, K_a)
     if Gamma_hat is None:
         return None
@@ -149,7 +149,7 @@ def grid_search_sarima(w, p_max, q_max, P_max, Q_max, s, K_a, lam):
                         X_t_array.append(x_A_t + x_M_t)
                         w_array.append(w[t])
                         
-                    eta_hat = estimar_eta_sarima(X_t_array, w_array, lam)
+                    eta_hat = estimar_eta_sarima(X_t_array, w_array)
                     if eta_hat is None:
                         continue
                         
@@ -175,15 +175,15 @@ def grid_search_sarima(w, p_max, q_max, P_max, Q_max, s, K_a, lam):
         'eta': best_eta.tolist(),
         'L_A': best_L_A,
         'L_M': best_L_M,
-        'Gamma_hat': Gamma_hat.tolist() if Gamma_hat is not None else [] # CORRECCIÓN: Guardado de Gamma_hat Phase I
+        'Gamma_hat': Gamma_hat.tolist() if Gamma_hat is not None else []
     }
 
 # =============================================================================
 # 3. ALGORITMOS F-ARIMA
 # =============================================================================
 
-def entrenar_farima(y, K_p_max, p_max, q_max, K_a, lam):
-    """Entrena Fourier (Periodograma + OLS) y modela el residuo con ARIMA(p,0,q)"""
+def entrenar_farima(y, d, K_p_max, p_max, q_max, K_a, lam):
+    """Entrena Fourier (Periodograma + OLS-Penalizado) y modela el residuo con ARIMA(p,d,q)"""
     f_k, I_fk = periodograma(y)
     
     # Excluir frecuencia 0 (media continua) para buscar la frecuencia fundamental
@@ -218,8 +218,9 @@ def entrenar_farima(y, K_p_max, p_max, q_max, K_a, lam):
             best_gamma = gamma_hat
             best_residuals = res
             
-    # Componente ARIMA(p,0,q) sobre los residuos. Lógica SARIMA con P=0, Q=0
-    arima_res = grid_search_sarima(best_residuals, p_max, q_max, 0, 0, 0, K_a, lam)
+    # Componente ARIMA(p,d,q) sobre los residuos. Lógica SARIMA con D=0, s=0
+    w_residuals = diferenciar_serie(best_residuals, d, 0, 0)
+    arima_res = grid_search_sarima(w_residuals, p_max, q_max, 0, 0, 0, K_a, lam)
     
     return {
         'T_p': float(T_p),
@@ -262,7 +263,7 @@ if __name__ == "__main__":
     modelo_sarima = grid_search_sarima(w_train, p_max, q_max, P_max, Q_max, s, K_a, lam)
     
     # 3. Entrenar F-ARIMA
-    modelo_farima = entrenar_farima(y_train, K_p_max, p_max, q_max, K_a, lam)
+    modelo_farima = entrenar_farima(y_train, d, K_p_max, p_max, q_max, K_a, lam)
     
     # 4. Guardar resultados en CSV usando solo Pandas (Sin Json)
     resultados = {
@@ -275,7 +276,7 @@ if __name__ == "__main__":
                 str(modelo_farima['arima_model']['L_A']) if modelo_farima['arima_model'] else ''],
         'L_M': [str(modelo_sarima['L_M']) if modelo_sarima else '', 
                 str(modelo_farima['arima_model']['L_M']) if modelo_farima['arima_model'] else ''],
-        'Gamma_hat_Phase1': [str(modelo_sarima['Gamma_hat']) if modelo_sarima else '', # CORRECCIÓN: Columna agregada
+        'Gamma_hat_Phase1': [str(modelo_sarima['Gamma_hat']) if modelo_sarima else '',
                              str(modelo_farima['arima_model']['Gamma_hat']) if modelo_farima['arima_model'] else ''],
         'T_p': [np.nan, modelo_farima['T_p']],
         'K_p': [np.nan, modelo_farima['K_p']],
