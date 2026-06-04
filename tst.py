@@ -98,29 +98,35 @@ def predecir_arima_step(w_true, epsilon_true, t, L_A, L_M, eta):
 
 if __name__ == "__main__":
     
-    # 1. Cargar configuraciones e hiperparámetros
-    test_config = pd.read_csv("test.csv")
-    start_index = int(test_config['start_index'].values[0])
-    end_index = int(test_config['end_index'].values[0])
+    # 1. Cargar Serie de Tiempo y Variables Fijas
+    datos = pd.read_csv("tserie.csv")
+    y_full = datos.iloc[:, 0].values
     
-    train_config = pd.read_csv("train.csv")
-    K_a = int(train_config['K_a'].values[0])
+    train_size = 0.8
+    K_a = 15 # Debe coincidir con el usado en trn.py
     
-    adf_results = pd.read_csv("adf_results.csv")
+    start_index = int(len(y_full) * train_size)
+    end_index = len(y_full)
+    
+    t_test = np.arange(start_index, end_index)
+    y_true_test = y_full[start_index:end_index]
+    
+    # 2. Cargar resultados previos (archivos ganadores)
+    adf_results = pd.read_csv("adf.csv")
     d = int(adf_results['d'].values[0])
     D = int(adf_results['D'].values[0])
     s = int(adf_results['s'].values[0])
     
-    df_train = pd.read_csv("train_results.csv")
+    df_train = pd.read_csv("train.csv")
     
-    # 2. Extraer parámetros SARIMA
+    # 3. Extraer parámetros SARIMA
     row_sarima = df_train[df_train['modelo'] == 'SARIMA'].iloc[0]
     eta_sarima = np.array(parse_list(row_sarima['eta']))
     LA_sarima = parse_list(row_sarima['L_A'])
     LM_sarima = parse_list(row_sarima['L_M'])
     Gamma_sarima = np.array(parse_list(row_sarima['Gamma_hat_Phase1']))
     
-    # 3. Extraer parámetros F-ARIMA
+    # 4. Extraer parámetros F-ARIMA
     row_farima = df_train[df_train['modelo'] == 'FARIMA'].iloc[0]
     T_p = float(row_farima['T_p'])
     K_p = int(float(row_farima['K_p']))
@@ -130,16 +136,6 @@ if __name__ == "__main__":
     LA_farima = parse_list(row_farima['L_A'])
     LM_farima = parse_list(row_farima['L_M'])
     Gamma_farima = np.array(parse_list(row_farima['Gamma_hat_Phase1']))
-    
-    # 4. Cargar Serie de Tiempo
-    datos = pd.read_csv("tserie.csv")
-    y_full = datos.iloc[:, 0].values
-    
-    if end_index > len(y_full):
-        end_index = len(y_full)
-        
-    t_test = np.arange(start_index, end_index)
-    y_true_test = y_full[start_index:end_index]
     
     # ---------------------------------------------------------
     # 5. PREDICCIÓN SARIMA (One-Step-Ahead)
@@ -210,8 +206,8 @@ if __name__ == "__main__":
                         test_jarque_bera(res_farima[mask_f])]
     }
     
-    pd.DataFrame(metrics).to_csv("tst_metrics.csv", index=False)
-    print("Evaluación finalizada. Métricas guardadas en tst_metrics.csv")
+    pd.DataFrame(metrics).to_csv("test.csv", index=False)
+    print("Evaluación finalizada. Métricas guardadas en test.csv")
     print(pd.DataFrame(metrics))
     
     # ---------------------------------------------------------
