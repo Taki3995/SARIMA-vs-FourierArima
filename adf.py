@@ -116,14 +116,12 @@ def buscar_ordenes_integracion(serie, s, alpha, max_lag):
 
 if __name__ == "__main__":
     data_path = "tserie.csv"
-    config_path = "adf.csv"
-    output_path = "adf_results.csv"
+    output_path = "adf.csv"
     
-    # Leer configuración asegurando los tipos correctos
-    config = pd.read_csv(config_path)
-    alpha = float(config['significancia'].values[0])
-    max_lag = int(config['max_lag'].values[0])
-    s = int(config['s'].values[0])
+    # Parámetros fijos de configuración para la búsqueda
+    alpha = 0.05
+    max_lag = 12
+    s = 12
     
     # Leer datos
     datos = pd.read_csv(data_path)
