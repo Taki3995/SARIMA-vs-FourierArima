@@ -235,18 +235,18 @@ def entrenar_farima(y, d, K_p_max, p_max, q_max, K_a, lam):
 
 if __name__ == "__main__":
     
-    # 1. Cargar datos y configuraciones
-    train_config = pd.read_csv("train.csv")
-    train_size = float(train_config['train_size'].values[0])
-    p_max = int(train_config['p_max'].values[0])
-    q_max = int(train_config['q_max'].values[0])
-    P_max = int(train_config['P_max'].values[0])
-    Q_max = int(train_config['Q_max'].values[0])
-    K_a = int(train_config['K_a'].values[0])
-    lam = float(train_config['lam'].values[0])
-    K_p_max = int(train_config['K_p_max'].values[0])
+    # 1. Hiperparámetros fijos de configuración para la búsqueda
+    train_size = 0.8
+    p_max = 2
+    q_max = 2
+    P_max = 1
+    Q_max = 1
+    K_a = 15
+    lam = 0.01
+    K_p_max = 5
     
-    adf_results = pd.read_csv("adf_results.csv")
+    # 2. Cargar datos
+    adf_results = pd.read_csv("adf.csv")
     d = int(adf_results['d'].values[0])
     D = int(adf_results['D'].values[0])
     s = int(adf_results['s'].values[0])
@@ -258,14 +258,14 @@ if __name__ == "__main__":
     n_train = int(len(y_full) * train_size)
     y_train = y_full[:n_train]
     
-    # 2. Entrenar SARIMA
+    # 3. Entrenar SARIMA
     w_train = diferenciar_serie(y_train, d, D, s)
     modelo_sarima = grid_search_sarima(w_train, p_max, q_max, P_max, Q_max, s, K_a, lam)
     
-    # 3. Entrenar F-ARIMA
+    # 4. Entrenar F-ARIMA
     modelo_farima = entrenar_farima(y_train, d, K_p_max, p_max, q_max, K_a, lam)
     
-    # 4. Guardar resultados en CSV usando solo Pandas (Sin Json)
+    # 5. Guardar resultados en CSV usando solo Pandas (Sin Json)
     resultados = {
         'modelo': ['SARIMA', 'FARIMA'],
         'order': [str(modelo_sarima['order']) if modelo_sarima else '', 
@@ -284,6 +284,6 @@ if __name__ == "__main__":
     }
     
     df_resultados = pd.DataFrame(resultados)
-    df_resultados.to_csv("train_results.csv", index=False)
+    df_resultados.to_csv("train.csv", index=False)
     
-    print("Entrenamiento finalizado. Resultados guardados en train_results.csv")
+    print("Entrenamiento finalizado. Resultados de configuración guardados en train.csv")
