@@ -174,7 +174,8 @@ def grid_search_sarima(w, p_max, q_max, P_max, Q_max, s, K_a, lam):
         'order': best_params,
         'eta': best_eta.tolist(),
         'L_A': best_L_A,
-        'L_M': best_L_M
+        'L_M': best_L_M,
+        'Gamma_hat': Gamma_hat.tolist() if Gamma_hat is not None else [] # CORRECCIÓN: Guardado de Gamma_hat Phase I
     }
 
 # =============================================================================
@@ -274,6 +275,8 @@ if __name__ == "__main__":
                 str(modelo_farima['arima_model']['L_A']) if modelo_farima['arima_model'] else ''],
         'L_M': [str(modelo_sarima['L_M']) if modelo_sarima else '', 
                 str(modelo_farima['arima_model']['L_M']) if modelo_farima['arima_model'] else ''],
+        'Gamma_hat_Phase1': [str(modelo_sarima['Gamma_hat']) if modelo_sarima else '', # CORRECCIÓN: Columna agregada
+                             str(modelo_farima['arima_model']['Gamma_hat']) if modelo_farima['arima_model'] else ''],
         'T_p': [np.nan, modelo_farima['T_p']],
         'K_p': [np.nan, modelo_farima['K_p']],
         'gamma': [np.nan, str(modelo_farima['gamma'])]
