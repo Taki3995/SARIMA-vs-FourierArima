@@ -123,9 +123,9 @@ if __name__ == "__main__":
     max_lag = 12
     s = 12
     
-    # Leer datos
-    datos = pd.read_csv(data_path)
-    serie = datos.iloc[:, 0].values 
+    # Leer datos (Corrección aplicada: header=None y selección de la columna 1)
+    datos = pd.read_csv(data_path, header=None)
+    serie = datos.iloc[:, 1].values 
     
     # Ejecutar búsqueda de órdenes
     d, D = buscar_ordenes_integracion(serie, s, alpha, max_lag)
