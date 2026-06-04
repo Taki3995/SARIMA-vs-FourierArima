@@ -98,9 +98,9 @@ def predecir_arima_step(w_true, epsilon_true, t, L_A, L_M, eta):
 
 if __name__ == "__main__":
     
-    # 1. Cargar Serie de Tiempo y Variables Fijas
-    datos = pd.read_csv("tserie.csv")
-    y_full = datos.iloc[:, 0].values
+    # 1. Cargar Serie de Tiempo y Variables Fijas (Corregida la lectura del CSV)
+    datos = pd.read_csv("tserie.csv", header=None)
+    y_full = datos.iloc[:, 1].values
     
     train_size = 0.8
     K_a = 15 # Debe coincidir con el usado en trn.py

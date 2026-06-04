@@ -251,8 +251,9 @@ if __name__ == "__main__":
     D = int(adf_results['D'].values[0])
     s = int(adf_results['s'].values[0])
     
-    datos = pd.read_csv("tserie.csv")
-    y_full = datos.iloc[:, 0].values
+    # Carga de datos corregida: se ignora el header y se toma la columna de los valores reales
+    datos = pd.read_csv("tserie.csv", header=None)
+    y_full = datos.iloc[:, 1].values
     
     # Dividir Entrenamiento
     n_train = int(len(y_full) * train_size)
