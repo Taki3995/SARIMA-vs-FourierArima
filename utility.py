@@ -1,100 +1,216 @@
 import numpy as np
 import pandas as pd
-import math
+import matplotlib.pyplot as plt
 
-def calculate_mape(y_true, y_pred):
-    """
-    Calcula el Mean Absolute Percentage Error (MAPE).
-    """
-    y_true, y_pred = np.array(y_true), np.array(y_pred)
-    # Se evita la división por cero agregando un epsilon o filtrando
-    non_zero_idx = y_true != 0
-    return np.mean(np.abs((y_true[non_zero_idx] - y_pred[non_zero_idx]) / y_true[non_zero_idx])) * 100
+# =============================================================================
+# 1. FUNCIONES MATEMÁTICAS AUXILIARES (Sin módulo math)
+# =============================================================================
 
-def calculate_mnse(y_true, y_pred):
-    """
-    Calcula el Modified Nash-Sutcliffe Efficiency (mNSE) usando diferencias absolutas.
-    """
-    y_true, y_pred = np.array(y_true), np.array(y_pred)
-    mean_y_true = np.mean(y_true)
-    
-    numerator = np.sum(np.abs(y_true - y_pred))
-    denominator = np.sum(np.abs(y_true - mean_y_true))
-    
-    if denominator == 0:
-        return np.nan
-        
-    return 1 - (numerator / denominator)
+def factorial(n):
+    """Calcula el factorial de un número entero."""
+    if n == 0 or n == 1:
+        return 1
+    res = 1
+    for i in range(2, int(n) + 1):
+        res *= i
+    return res
 
-def periodogram(series, fs=1):
+def combinatoria(n, k):
+    """Calcula el coeficiente binomial (n sobre k)."""
+    if k < 0 or k > n:
+        return 0
+    return factorial(n) // (factorial(k) * factorial(n - k))
+
+# =============================================================================
+# 2. FUNCIONES F-ARIMA
+# =============================================================================
+
+def periodograma(x):
     """
-    Calcula el Periodograma para identificar componentes periódicas.
-    
-    Parámetros:
-    series: array-like con la serie de tiempo temporal.
-    fs: frecuencia de muestreo (por defecto 1 muestra/unidad de tiempo).
+    Calcula el Periodograma de una serie de tiempo.
+    Fórmula: I(f_k) = (1/N) * |X[k]|^2
+    Bins de frecuencia positivos: K = floor(N/2)
     """
-    x = np.array(series)
     N = len(x)
-    
-    # Transformada de Fourier Discreta
+    # X[k] mediante Transformada de Fourier Discreta
     X_k = np.fft.fft(x)
     
-    # Bins de Frecuencia positivos (K = floor(N/2))
+    # Cálculo del periodograma I(f_k)
+    I_fk = (1 / N) * (np.abs(X_k)**2)
+    
+    # Cálculo estricto de K para los bins positivos
     K = int(np.floor(N / 2))
     
-    # Cálculo del Periodograma I(f_k) = (1/N) * |X[k]|^2
-    I_fk = (1 / N) * (np.abs(X_k[:K + 1]) ** 2)
-    
-    # Vector de bins de frecuencia
+    # Vector de frecuencias
     f_k = np.arange(K + 1) / N
     
-    return f_k, I_fk
+    return f_k, I_fk[:K + 1]
 
-def ols_penalized(X, Y, lambda_param=0.0):
+def estimar_gamma_farima(X, Y, lam):
     """
-    Estima los coeficientes expandidos vía método OLS-Penalizado (Ridge).
-    Si lambda_param = 0, equivale a OLS ordinario de doble fase.
+    Estima los coeficientes de Fourier por OLS-Penalizado.
+    Fórmula: Gamma_hat = (X^T X + lambda I)^-1 X^T Y
     """
-    X = np.array(X)
-    Y = np.array(Y)
-    
-    # Matriz Identidad para la regularización (penalización)
     I = np.eye(X.shape[1])
+    X_T = X.T
     
-    # Estimación: (X^T X + lambda*I)^-1 X^T Y
-    # Se utiliza pseudoinversa de Moore-Penrose para evitar problemas de singularidad si lambda=0
-    inverse_term = np.linalg.pinv(X.T @ X + lambda_param * I)
-    gamma_hat = inverse_term @ X.T @ Y
+    mat_inv = np.linalg.inv(np.dot(X_T, X) + lam * I)
+    gamma_hat = np.dot(np.dot(mat_inv, X_T), Y)
     
     return gamma_hat
 
-def binomial_reconstruction(w_t, y_past, d, D, s, t_index):
+# =============================================================================
+# 3. FUNCIONES SARIMA
+# =============================================================================
+
+def estimar_eta_sarima(X_t_array, w_array, lam):
     """
-    Recupera la serie de tiempo a su dominio original usando el Teorema del Binomio de Newton.
-    
-    Parámetros:
-    w_t: Valor diferenciado en el tiempo t.
-    y_past: Array o Serie con los valores históricos originales de Y.
-    d: Orden de diferenciación ordinaria.
-    D: Orden de diferenciación estacional.
-    s: Periodo estacional.
-    t_index: Índice actual (t) referencial dentro de y_past.
+    Estima la representación lineal expandida (Fase II).
+    Fórmula: eta_lambda = (sum_{t=tau}^{T} X_t X_t^T + lambda I)^-1 (sum_{t=tau}^{T} X_t w_t)
     """
-    y_t = w_t
+    if len(X_t_array) == 0:
+        return None
+        
+    m = len(X_t_array[0]) # Dimensión del vector X_t
+    I = np.eye(m)
     
-    for i in range(d + 1):
-        for j in range(D + 1):
+    sum_XX = np.zeros((m, m))
+    sum_Xw = np.zeros((m, 1))
+    
+    # Sumatorias desde tau hasta T
+    for t in range(len(X_t_array)):
+        # Asegurar que X_t sea un vector columna
+        X_t = np.array(X_t_array[t]).reshape(-1, 1)
+        w_t = w_array[t]
+        
+        sum_XX += np.dot(X_t, X_t.T)
+        sum_Xw += X_t * w_t
+        
+    mat_inv = np.linalg.inv(sum_XX + lam * I)
+    eta_hat = np.dot(mat_inv, sum_Xw)
+    
+    return eta_hat
+
+def recuperar_sarima(w_t, y_past, t, d, D, s):
+    """
+    Recupera el valor original y_t usando el Teorema del Binomio de Newton.
+    Fórmula: y_t = w_t - sum_{i=0..d, j=0..D, (i,j)!=(0,0)} (-1)^{i+j} * comb(d,i) * comb(D,j) * y_{t-i-js}
+    """
+    suma = 0.0
+    for i in range(int(d) + 1):
+        for j in range(int(D) + 1):
             if i == 0 and j == 0:
-                continue  # Se omite (i, j) = (0, 0) según la formulación
+                continue # Se excluye la condición (0,0)
             
-            # Coeficiente (-1)^(i+j) * (d sobre i) * (D sobre j)
-            coef = ((-1)**(i + j)) * math.comb(d, i) * math.comb(D, j)
+            signo = (-1)**(i + j)
+            coef_d = combinatoria(d, i)
+            coef_D = combinatoria(D, j)
             
-            # Cálculo del retardo
-            lag = i + (j * s)
+            idx_pasado = t - i - j * s
             
-            # Recuperación: y_t = w_t - sum(...)
-            y_t -= coef * y_past[t_index - lag]
+            # Extraer y_{t-i-js}
+            y_val = y_past.get(idx_pasado, 0.0) if isinstance(y_past, dict) else y_past[idx_pasado]
             
+            suma += signo * coef_d * coef_D * y_val
+            
+    y_t = w_t - suma
     return y_t
+
+# =============================================================================
+# 4. MÉTRICAS Y TESTS ESTADÍSTICOS
+# =============================================================================
+
+def calc_mnse(real, pred):
+    """
+    Calcula la Eficiencia de Nash-Sutcliffe Modificada (mNSE).
+    Fórmula: mNSE = 1 - ( sum(|real - pred|) / sum(|real - mean(real)|) )
+    """
+    real = np.array(real)
+    pred = np.array(pred)
+    
+    numerador = np.sum(np.abs(real - pred))
+    denominador = np.sum(np.abs(real - np.mean(real)))
+    
+    # Evitar división por cero si la serie real es constante
+    if denominador == 0:
+        return np.nan
+        
+    mnse = 1.0 - (numerador / denominador)
+    return mnse
+
+def calc_mape(real, pred):
+    """
+    Calcula el Error Porcentual Absoluto Medio (MAPE).
+    Fórmula: MAPE = (100 / N) * sum(|(real - pred) / real|)
+    """
+    real = np.array(real)
+    pred = np.array(pred)
+    
+    # Máscara para evitar división por cero
+    mask = real != 0
+    real_safe = real[mask]
+    pred_safe = pred[mask]
+    
+    n = len(real_safe)
+    if n == 0:
+        return np.nan
+        
+    mape = (100.0 / n) * np.sum(np.abs((real_safe - pred_safe) / real_safe))
+    return mape
+
+def test_jarque_bera(residuos):
+    """
+    Calcula el estadístico de Jarque-Bera.
+    Fórmulas: 
+    S (Asimetría) = m3 / m2^(3/2)
+    K (Curtosis)  = m4 / m2^2
+    JB = (N / 6) * (S^2 + ((K - 3)^2) / 4)
+    """
+    res = np.array(residuos)
+    n = len(res)
+    if n == 0:
+        return np.nan
+        
+    media = np.mean(res)
+    
+    # Momentos centrales (usando el estimador poblacional dividiendo por n)
+    m2 = np.sum((res - media)**2) / n
+    m3 = np.sum((res - media)**3) / n
+    m4 = np.sum((res - media)**4) / n
+    
+    # Evitar división por cero
+    if m2 == 0:
+        return np.nan
+        
+    S = m3 / (m2**(1.5))
+    K = m4 / (m2**2)
+    
+    jb_stat = (n / 6.0) * (S**2 + ((K - 3.0)**2) / 4.0)
+    
+    return jb_stat
+
+def calc_acf(residuos, lags):
+    """
+    Calcula la Función de Autocorrelación (ACF).
+    Fórmula: r_k = sum((y_t - media)*(y_{t+k} - media)) / sum((y_t - media)^2)
+    """
+    res = np.array(residuos)
+    n = len(res)
+    media = np.mean(res)
+    
+    var_total = np.sum((res - media)**2)
+    
+    # Si la varianza es 0, no hay autocorrelación
+    if var_total == 0:
+        return np.zeros(lags + 1)
+        
+    acf_vals = []
+    for k in range(lags + 1):
+        if k == 0:
+            acf_vals.append(1.0)
+        else:
+            # Producto de la serie truncada con su versión rezagada k pasos
+            cov_k = np.sum((res[:n-k] - media) * (res[k:] - media))
+            acf_vals.append(cov_k / var_total)
+            
+    return np.array(acf_vals)
