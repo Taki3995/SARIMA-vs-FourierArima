@@ -63,16 +63,15 @@ def estimar_gamma_farima(X, Y, lam):
 # 3. FUNCIONES SARIMA
 # =============================================================================
 
-def estimar_eta_sarima(X_t_array, w_array, lam):
+def estimar_eta_sarima(X_t_array, w_array):
     """
-    Estima la representación lineal expandida (Fase II).
-    Fórmula: eta_lambda = (sum_{t=tau}^{T} X_t X_t^T + lambda I)^-1 (sum_{t=tau}^{T} X_t w_t)
+    Estima la representación lineal expandida (Fase II) vía OLS estándar.
+    Fórmula: eta_hat = (sum X_t X_t^T)^-1 (sum X_t w_t)
     """
     if len(X_t_array) == 0:
         return None
         
     m = len(X_t_array[0]) # Dimensión del vector X_t
-    I = np.eye(m)
     
     sum_XX = np.zeros((m, m))
     sum_Xw = np.zeros((m, 1))
@@ -86,7 +85,11 @@ def estimar_eta_sarima(X_t_array, w_array, lam):
         sum_XX += np.dot(X_t, X_t.T)
         sum_Xw += X_t * w_t
         
-    mat_inv = np.linalg.inv(sum_XX + lam * I)
+    try:
+        mat_inv = np.linalg.inv(sum_XX)
+    except np.linalg.LinAlgError:
+        return None # Falla por matriz singular en OLS
+        
     eta_hat = np.dot(mat_inv, sum_Xw)
     
     return eta_hat
