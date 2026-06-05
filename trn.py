@@ -14,10 +14,8 @@ def calcular_aic(sse, N, num_params):
     """
     denominador = N - num_params - 3
     if sse <= 0 or denominador <= 0:
-        return np.inf # Penalización si no hay suficientes grados de libertad
-        
-    aic = np.log(sse) + (2 * (num_params + 2)) / denominador
-    return aic
+        return np.inf
+    return np.log(sse) + (2 * (num_params + 2)) / denominador
 
 def diferenciar_serie(y, d, D, s):
     """Aplica diferenciación ordinaria y estacional: w_t = nabla^d nabla_s^D y_t"""
@@ -34,7 +32,7 @@ def construir_matriz_fourier(t_n, T_p, K_p):
     X = np.zeros((n_samples, 2 * K_p))
     for k in range(1, K_p + 1):
         arg = (2 * np.pi * k * t_n) / T_p
-        X[:, 2*(k-1)] = np.cos(arg)
+        X[:, 2*(k-1)]     = np.cos(arg)
         X[:, 2*(k-1) + 1] = np.sin(arg)
     return X
 
@@ -43,72 +41,90 @@ def construir_matriz_fourier(t_n, T_p, K_p):
 # =============================================================================
 
 def sarima_fase_1(w, K_a):
-    """Phase I: Estimación de Residuos vía AR(K_a) usando Pseudo-inversa SVD"""
+    """
+    Phase I: Estimación de Residuos vía AR(K_a) usando Pseudo-inversa SVD.
+
+    CORRECCIÓN: el loop anterior construía Z[t,:] = w[t:t+K_a][::-1],
+    que usaba w[t], w[t+1], ..., w[t+K_a-1] — valores presentes y futuros.
+    El regresor en el instante t debe ser z_t = [w_{t-1}, ..., w_{t-Ka}].
+    El loop correcto itera t desde K_a hasta len(w)-1 y toma la ventana
+    pasada w[t-1 : t-K_a-1 : -1].
+    """
     n_samples = len(w) - K_a
     if n_samples <= 0:
         return None, None
-        
-    Y = w[K_a:]
+
+    Y = w[K_a:]                         # w_{K_a}, w_{K_a+1}, ..., w_{T-1}
     Z = np.zeros((n_samples, K_a))
-    
-    for t in range(n_samples):
-        # z_t = [w_{t-1}, w_{t-2}, ..., w_{t-K_a}]
-        Z[t, :] = w[t : t + K_a][::-1] 
-        
+
+    for t in range(K_a, len(w)):
+        # z_t = [w_{t-1}, w_{t-2}, ..., w_{t-K_a}]  ← ventana estrictamente pasada
+        Z[t - K_a, :] = w[t - 1 : t - K_a - 1 : -1]
+
     try:
-        # Reemplazo de la inversa clásica por el método de Pseudo-inversa vía SVD
         U, S_vals, VT = np.linalg.svd(Z, full_matrices=False)
-        S_inv = np.where(S_vals > 1e-10, 1.0 / S_vals, 0.0)
+        S_inv  = np.where(S_vals > 1e-10, 1.0 / S_vals, 0.0)
         Z_pinv = np.dot(VT.T, np.dot(np.diag(S_inv), U.T))
         Gamma_hat = np.dot(Z_pinv, Y)
     except np.linalg.LinAlgError:
         return None, None
-        
+
     epsilon_hat = Y - np.dot(Z, Gamma_hat)
     return Gamma_hat, epsilon_hat
 
 def construir_conjuntos_retardo(p, q, P, Q, s):
-    """Construye los conjuntos de rezagos L_A y L_M."""
-    L_A = set([i for i in range(1, p + 1)])
-    L_A.update([j * s for j in range(1, P + 1)])
-    for i in range(1, p + 1):
-        for j in range(1, P + 1):
-            L_A.add(i + j * s)
-            
-    L_M = set([m for m in range(1, q + 1)])
-    L_M.update([n * s for n in range(1, Q + 1)])
-    for m in range(1, q + 1):
-        for n in range(1, Q + 1):
-            L_M.add(m + n * s)
-            
-    return sorted(list(L_A)), sorted(list(L_M))
+    """
+    Construye los conjuntos de rezagos L_A y L_M.
+
+    CORRECCIÓN: cuando s=0 (caso ARIMA puro en F-ARIMA), j*s = 0 para
+    cualquier j, lo que añadía el lag 0 a L_A y L_M — es decir, w_t y
+    ε_t actuales como regresores de sí mismos (data leakage).
+    Se filtra cualquier lag <= 0 antes de añadirlo al conjunto.
+    """
+    s = int(s)
+
+    L_A = set(range(1, p + 1))
+    if s > 0:
+        L_A.update(j * s       for j in range(1, P + 1))
+        L_A.update(i + j * s   for i in range(1, p + 1)
+                                for j in range(1, P + 1))
+    L_A = {lag for lag in L_A if lag > 0}   # Filtro de seguridad
+
+    L_M = set(range(1, q + 1))
+    if s > 0:
+        L_M.update(n * s       for n in range(1, Q + 1))
+        L_M.update(m + n * s   for m in range(1, q + 1)
+                                for n in range(1, Q + 1))
+    L_M = {lag for lag in L_M if lag > 0}   # Filtro de seguridad
+
+    return sorted(L_A), sorted(L_M)
 
 def reconstruir_w_y_calcular_sse(w, epsilon_hat, K_a, L_A, L_M, eta_hat):
     """Evalúa la serie w_t ajustada con Fase II para obtener el SSE."""
     max_lag_A = max(L_A) if L_A else 0
     max_lag_M = max(L_M) if L_M else 0
     tau = max(K_a, max_lag_A, max_lag_M)
-    
+
     if tau >= len(w):
         return np.inf, 0
 
-    sse = 0.0
+    sse    = 0.0
     n_eval = 0
     for t in range(tau, len(w)):
         x_A_t = [w[t - l] for l in L_A]
         x_M_t = []
         for l in L_M:
             idx_eps = t - l - K_a
-            if idx_eps >= 0 and idx_eps < len(epsilon_hat):
+            if 0 <= idx_eps < len(epsilon_hat):
                 x_M_t.append(epsilon_hat[idx_eps])
             else:
                 x_M_t.append(0.0)
-                
-        X_t = np.array(x_A_t + x_M_t)
+
+        X_t  = np.array(x_A_t + x_M_t)
         pred = np.dot(X_t, eta_hat)
-        sse += (w[t] - pred)**2
+        sse += (w[t] - pred) ** 2
         n_eval += 1
-        
+
     return sse, n_eval
 
 def grid_search_sarima(w, p_max, q_max, P_max, Q_max, s, K_a, lam):
@@ -116,70 +132,76 @@ def grid_search_sarima(w, p_max, q_max, P_max, Q_max, s, K_a, lam):
     Gamma_hat, epsilon_hat = sarima_fase_1(w, K_a)
     if Gamma_hat is None:
         return None
-        
-    best_aic = np.inf
+
+    best_aic    = np.inf
     best_params = None
-    best_eta = None
-    best_L_A = None
-    best_L_M = None
-    
+    best_eta    = None
+    best_L_A    = None
+    best_L_M    = None
+
     for p in range(p_max + 1):
         for q in range(q_max + 1):
             for P in range(P_max + 1):
                 for Q in range(Q_max + 1):
                     if p == 0 and q == 0 and P == 0 and Q == 0:
                         continue
-                        
+
                     L_A, L_M = construir_conjuntos_retardo(p, q, P, Q, s)
-                    
+
+                    # Si tras el filtro no quedaron rezagos, saltar
+                    if not L_A and not L_M:
+                        continue
+
                     max_lag_A = max(L_A) if L_A else 0
                     max_lag_M = max(L_M) if L_M else 0
                     tau = max(K_a, max_lag_A, max_lag_M)
-                    
+
                     if tau >= len(w):
                         continue
-                        
+
                     X_t_array = []
-                    w_array = []
+                    w_array   = []
                     for t in range(tau, len(w)):
                         x_A_t = [w[t - l] for l in L_A]
                         x_M_t = []
                         for l in L_M:
                             idx_eps = t - l - K_a
-                            if idx_eps >= 0 and idx_eps < len(epsilon_hat):
+                            if 0 <= idx_eps < len(epsilon_hat):
                                 x_M_t.append(epsilon_hat[idx_eps])
                             else:
                                 x_M_t.append(0.0)
                         X_t_array.append(x_A_t + x_M_t)
                         w_array.append(w[t])
-                        
-                    # Corrección: Se añade el parámetro lam a la invocación de la función
+
                     eta_hat = estimar_eta_sarima(X_t_array, w_array, lam)
                     if eta_hat is None:
                         continue
-                        
-                    eta_hat = eta_hat.flatten()
-                    sse, n_eval = reconstruir_w_y_calcular_sse(w, epsilon_hat, K_a, L_A, L_M, eta_hat)
-                    
+
+                    # CORRECCIÓN: estimar_eta_sarima ya devuelve vector 1-D;
+                    # .flatten() eliminado para evitar errores silenciosos de shape.
+                    sse, n_eval = reconstruir_w_y_calcular_sse(
+                        w, epsilon_hat, K_a, L_A, L_M, eta_hat
+                    )
+
                     num_params = len(L_A) + len(L_M)
                     aic = calcular_aic(sse, n_eval, num_params)
-                    
+
                     if aic < best_aic:
-                        best_aic = aic
+                        best_aic    = aic
                         best_params = (p, q, P, Q)
-                        best_eta = eta_hat
-                        best_L_A = L_A
-                        best_L_M = L_M
-                        
+                        best_eta    = eta_hat
+                        best_L_A    = L_A
+                        best_L_M    = L_M
+
     if best_params is None:
         return None
-        
+
     return {
-        'aic': float(best_aic),
-        'order': best_params,
-        'eta': best_eta.tolist(),
-        'L_A': best_L_A,
-        'L_M': best_L_M,
+        'aic'      : float(best_aic),
+        'order'    : best_params,
+        'eta'      : best_eta.tolist(),
+        'L_A'      : best_L_A,
+        'L_M'      : best_L_M,
         'Gamma_hat': Gamma_hat.tolist() if Gamma_hat is not None else []
     }
 
@@ -189,64 +211,63 @@ def grid_search_sarima(w, p_max, q_max, P_max, Q_max, s, K_a, lam):
 
 def entrenar_farima(y, d, K_p_max, p_max, q_max, K_a, lam, s):
     """Entrena Fourier (Periodograma + OLS-Penalizado) y modela el residuo con ARIMA(p,d,q)"""
-    
+
     t_n = np.arange(len(y))
-    
-    # Corrección 1: Detrending lineal para evitar fuga espectral en reemplazo de np.diff
+
+    # Detrending lineal para evitar fuga espectral
     slope, intercept = np.polyfit(t_n, y, 1)
     y_detrended = y - (slope * t_n + intercept)
-    
-    f_k, I_fk = periodograma(y_detrended, f_s=s)
-    
-    # Excluir frecuencia 0 (media continua) para buscar la frecuencia fundamental
-    I_fk[0] = 0
-    idx_max = np.argmax(I_fk)
-    f_max = f_k[idx_max]
-    
-    # Convertir frecuencia física al período en formato de muestras (T_p)
-    T_p = (1.0 / f_max) * s if f_max > 0 else len(y)
-    
-    # --- CENTRADO DE LA SERIE ---
-    y_mean = np.mean(y)
+
+    # CORRECCIÓN: se usa f_s=1 (ciclos/muestra) para que T_p = 1/f_max
+    # directamente en muestras, sin depender de que f_s == s.
+    f_k, I_fk = periodograma(y_detrended, f_s=1.0)
+
+    # Excluir frecuencia 0 (componente DC) para buscar la frecuencia fundamental
+    I_fk[0]  = 0
+    idx_max  = np.argmax(I_fk)
+    f_max    = f_k[idx_max]
+
+    # T_p en número de muestras: T_p = 1 / f_max  (con f_s=1)
+    T_p = (1.0 / f_max) if f_max > 0 else float(len(y))
+
+    # Centrado de la serie
+    y_mean    = np.mean(y)
     y_centered = y - y_mean
-    
+
     best_aic_fourier = np.inf
-    best_Kp = 1
-    best_gamma = None
-    best_residuals = None
-    
+    best_Kp          = 1
+    best_gamma       = None
+    best_residuals   = None
+
     for K_p in range(1, K_p_max + 1):
-        X = construir_matriz_fourier(t_n, T_p, K_p)
-        
-        # Estimar coeficientes usando la serie centrada en lugar de y original
+        X        = construir_matriz_fourier(t_n, T_p, K_p)
         gamma_hat = estimar_gamma_farima(X, y_centered, lam).flatten()
-        
-        pred = np.dot(X, gamma_hat)
-        res = y_centered - pred
-        
-        # Sumar nuevamente la media global a los residuos para recuperar la estructura de y
+        pred     = np.dot(X, gamma_hat)
+        res      = y_centered - pred
+
+        # Residuos con la media restituida para preservar la escala de y
         res_con_media = res + y_mean
-        
-        sse = np.sum(res**2)
-        n_eval = len(y)
+
+        sse        = np.sum(res ** 2)
+        n_eval     = len(y)
         num_params = 2 * K_p
-        
-        aic = calcular_aic(sse, n_eval, num_params)
-        
+        aic        = calcular_aic(sse, n_eval, num_params)
+
         if aic < best_aic_fourier:
             best_aic_fourier = aic
-            best_Kp = K_p
-            best_gamma = gamma_hat
-            best_residuals = res_con_media
-            
-    # Componente ARIMA(p,d,q) sobre los residuos. Lógica SARIMA con D=0, s=0
+            best_Kp          = K_p
+            best_gamma       = gamma_hat
+            best_residuals   = res_con_media
+
+    # Componente ARIMA(p,d,q) sobre los residuos.
+    # Se pasa s=1 para evitar el data leakage por lag 0 cuando s=0.
     w_residuals = diferenciar_serie(best_residuals, d, 0, 0)
-    arima_res = grid_search_sarima(w_residuals, p_max, q_max, 0, 0, 0, K_a, lam)
-    
+    arima_res   = grid_search_sarima(w_residuals, p_max, q_max, 0, 0, 1, K_a, lam)
+
     return {
-        'T_p': float(T_p),
-        'K_p': best_Kp,
-        'gamma': best_gamma.tolist() if best_gamma is not None else [],
+        'T_p'        : float(T_p),
+        'K_p'        : best_Kp,
+        'gamma'      : best_gamma.tolist() if best_gamma is not None else [],
         'arima_model': arima_res
     }
 
@@ -255,57 +276,65 @@ def entrenar_farima(y, d, K_p_max, p_max, q_max, K_a, lam, s):
 # =============================================================================
 
 if __name__ == "__main__":
-    
-    # 1. Hiperparámetros fijos de configuración para la búsqueda
+
+    # Hiperparámetros
     train_size = 0.8
-    p_max = 2
-    q_max = 2
-    P_max = 1
-    Q_max = 1
-    K_a = 72
-    lam = 0.01
-    K_p_max = 5
-    
-    # 2. Cargar datos
+    p_max      = 2
+    q_max      = 2
+    P_max      = 1
+    Q_max      = 1
+    K_a        = 72
+    lam        = 0.01
+    K_p_max    = 5
+
+    # CORRECCIÓN: adf.csv ahora tiene múltiples filas (una por iteración ADF).
+    # Los valores finales d_final, D_final, s son iguales en todas las filas;
+    # se lee la última para obtener el resultado convergido.
     adf_results = pd.read_csv("adf.csv")
-    d = int(adf_results['d'].values[0])
-    D = int(adf_results['D'].values[0])
-    s = int(adf_results['s'].values[0])
-    
-    # Carga de datos corregida: se ignora el header y se toma la columna de los valores reales
-    datos = pd.read_csv("tserie.csv", header=None)
-    y_full = datos.iloc[:, 1].values
-    
-    # Dividir Entrenamiento
+    d = int(adf_results['d_final'].iloc[-1])
+    D = int(adf_results['D_final'].iloc[-1])
+    s = int(adf_results['s'].iloc[-1])
+
+    datos   = pd.read_csv("tserie.csv", header=None)
+    y_full  = datos.iloc[:, 1].values
+
     n_train = int(len(y_full) * train_size)
     y_train = y_full[:n_train]
-    
-    # 3. Entrenar SARIMA
-    w_train = diferenciar_serie(y_train, d, D, s)
+
+    # Entrenar SARIMA
+    w_train       = diferenciar_serie(y_train, d, D, s)
     modelo_sarima = grid_search_sarima(w_train, p_max, q_max, P_max, Q_max, s, K_a, lam)
-    
-    # 4. Entrenar F-ARIMA (Corrección 2: Usar solo d para la estacionariedad del residuo de Fourier)
+
+    # Entrenar F-ARIMA
     modelo_farima = entrenar_farima(y_train, d, K_p_max, p_max, q_max, K_a, lam, s)
-    
-    # 5. Guardar resultados en CSV usando solo Pandas (Sin Json)
+
+    # Guardar train.csv
     resultados = {
         'modelo': ['SARIMA', 'FARIMA'],
-        'order': [str(modelo_sarima['order']) if modelo_sarima else '', 
-                  str(modelo_farima['arima_model']['order']) if modelo_farima['arima_model'] else ''],
-        'eta': [str(modelo_sarima['eta']) if modelo_sarima else '', 
-                str(modelo_farima['arima_model']['eta']) if modelo_farima['arima_model'] else ''],
-        'L_A': [str(modelo_sarima['L_A']) if modelo_sarima else '', 
-                str(modelo_farima['arima_model']['L_A']) if modelo_farima['arima_model'] else ''],
-        'L_M': [str(modelo_sarima['L_M']) if modelo_sarima else '', 
-                str(modelo_farima['arima_model']['L_M']) if modelo_farima['arima_model'] else ''],
-        'Gamma_hat_Phase1': [str(modelo_sarima['Gamma_hat']) if modelo_sarima else '',
-                             str(modelo_farima['arima_model']['Gamma_hat']) if modelo_farima['arima_model'] else ''],
-        'T_p': [np.nan, modelo_farima['T_p']],
-        'K_p': [np.nan, modelo_farima['K_p']],
-        'gamma': [np.nan, str(modelo_farima['gamma'])]
+        'order': [
+            str(modelo_sarima['order'])                          if modelo_sarima                        else '',
+            str(modelo_farima['arima_model']['order'])           if modelo_farima['arima_model']         else ''
+        ],
+        'eta': [
+            str(modelo_sarima['eta'])                            if modelo_sarima                        else '',
+            str(modelo_farima['arima_model']['eta'])             if modelo_farima['arima_model']         else ''
+        ],
+        'L_A': [
+            str(modelo_sarima['L_A'])                            if modelo_sarima                        else '',
+            str(modelo_farima['arima_model']['L_A'])             if modelo_farima['arima_model']         else ''
+        ],
+        'L_M': [
+            str(modelo_sarima['L_M'])                            if modelo_sarima                        else '',
+            str(modelo_farima['arima_model']['L_M'])             if modelo_farima['arima_model']         else ''
+        ],
+        'Gamma_hat_Phase1': [
+            str(modelo_sarima['Gamma_hat'])                      if modelo_sarima                        else '',
+            str(modelo_farima['arima_model']['Gamma_hat'])       if modelo_farima['arima_model']         else ''
+        ],
+        'T_p'  : [np.nan,              modelo_farima['T_p']],
+        'K_p'  : [np.nan,              modelo_farima['K_p']],
+        'gamma': [np.nan,  str(modelo_farima['gamma'])]
     }
-    
-    df_resultados = pd.DataFrame(resultados)
-    df_resultados.to_csv("train.csv", index=False)
-    
+
+    pd.DataFrame(resultados).to_csv("train.csv", index=False)
     print("Entrenamiento finalizado. Resultados de configuración guardados en train.csv")
