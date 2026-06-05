@@ -22,51 +22,13 @@ def combinatoria(n, k):
     return factorial(n) // (factorial(k) * factorial(n - k))
 
 # =============================================================================
-# 2. FUNCIONES F-ARIMA
+# 2. FUNCIONES ARIMA (Two-Phase OLS)
 # =============================================================================
 
-def periodograma(x):
-    """
-    Calcula el Periodograma de una serie de tiempo.
-    Fórmula: I(f_k) = (1/N) * |X[k]|^2
-    Bins de frecuencia positivos: K = floor(N/2)
-    """
-    N = len(x)
-    # X[k] mediante Transformada de Fourier Discreta
-    X_k = np.fft.fft(x)
-    
-    # Cálculo del periodograma I(f_k)
-    I_fk = (1 / N) * (np.abs(X_k)**2)
-    
-    # Cálculo estricto de K para los bins positivos
-    K = int(np.floor(N / 2))
-    
-    # Vector de frecuencias
-    f_k = np.arange(K + 1) / N
-    
-    return f_k, I_fk[:K + 1]
-
-def estimar_gamma_farima(X, Y, lam):
-    """
-    Estima los coeficientes de Fourier por OLS-Penalizado.
-    Fórmula: Gamma_hat = (X^T X + lambda I)^-1 X^T Y
-    """
-    I = np.eye(X.shape[1])
-    X_T = X.T
-    
-    mat_inv = np.linalg.inv(np.dot(X_T, X) + lam * I)
-    gamma_hat = np.dot(np.dot(mat_inv, X_T), Y)
-    
-    return gamma_hat
-
-# =============================================================================
-# 3. FUNCIONES SARIMA
-# =============================================================================
-
-def estimar_eta_sarima(X_t_array, w_array):
+def estimar_eta_arima(X_t_array, z_array):
     """
     Estima la representación lineal expandida (Fase II) vía OLS estándar.
-    Fórmula: eta_hat = (sum X_t X_t^T)^-1 (sum X_t w_t)
+    Fórmula: eta_hat = (sum X_t X_t^T)^-1 (sum X_t z_t)
     """
     if len(X_t_array) == 0:
         return None
@@ -74,53 +36,48 @@ def estimar_eta_sarima(X_t_array, w_array):
     m = len(X_t_array[0]) # Dimensión del vector X_t
     
     sum_XX = np.zeros((m, m))
-    sum_Xw = np.zeros((m, 1))
+    sum_Xz = np.zeros((m, 1))
     
     # Sumatorias desde tau hasta T
     for t in range(len(X_t_array)):
         # Asegurar que X_t sea un vector columna
         X_t = np.array(X_t_array[t]).reshape(-1, 1)
-        w_t = w_array[t]
+        z_t = z_array[t]
         
         sum_XX += np.dot(X_t, X_t.T)
-        sum_Xw += X_t * w_t
+        sum_Xz += X_t * z_t
         
     try:
         mat_inv = np.linalg.inv(sum_XX)
     except np.linalg.LinAlgError:
         return None # Falla por matriz singular en OLS
         
-    eta_hat = np.dot(mat_inv, sum_Xw)
+    eta_hat = np.dot(mat_inv, sum_Xz)
     
     return eta_hat
 
-def recuperar_sarima(w_t, y_past, t, d, D, s):
+def recuperar_arima(z_hat, Y_past, t_plus_h, d):
     """
-    Recupera el valor original y_t usando el Teorema del Binomio de Newton.
-    Fórmula: y_t = w_t - sum_{i=0..d, j=0..D, (i,j)!=(0,0)} (-1)^{i+j} * comb(d,i) * comb(D,j) * y_{t-i-js}
+    Recupera el valor original Y_{t+h} usando el Teorema del Binomio de Newton.
+    Fórmula: Y_{t+h} = z_{t+h} - sum_{k=1}^{d} (-1)^{k} * comb(d,k) * Y_{t+h-k}
     """
     suma = 0.0
-    for i in range(int(d) + 1):
-        for j in range(int(D) + 1):
-            if i == 0 and j == 0:
-                continue # Se excluye la condición (0,0)
+    for k in range(1, int(d) + 1):
+        signo = (-1)**k
+        coef_d = combinatoria(d, k)
+        
+        idx_pasado = t_plus_h - k
+        
+        # Extraer Y_{t+h-k}
+        Y_val = Y_past.get(idx_pasado, 0.0) if isinstance(Y_past, dict) else Y_past[idx_pasado]
+        
+        suma += signo * coef_d * Y_val
             
-            signo = (-1)**(i + j)
-            coef_d = combinatoria(d, i)
-            coef_D = combinatoria(D, j)
-            
-            idx_pasado = t - i - j * s
-            
-            # Extraer y_{t-i-js}
-            y_val = y_past.get(idx_pasado, 0.0) if isinstance(y_past, dict) else y_past[idx_pasado]
-            
-            suma += signo * coef_d * coef_D * y_val
-            
-    y_t = w_t - suma
-    return y_t
+    Y_t_h = z_hat - suma
+    return Y_t_h
 
 # =============================================================================
-# 4. MÉTRICAS Y TESTS ESTADÍSTICOS
+# 3. MÉTRICAS Y TESTS ESTADÍSTICOS
 # =============================================================================
 
 def calc_mnse(real, pred):
