@@ -27,22 +27,24 @@ def combinatoria(n, k):
 
 def periodograma(x):
     """
-    Calcula el Periodograma de una serie de tiempo.
+    Calcula el Periodograma de una serie de tiempo con Zero-Padding.
     Fórmula: I(f_k) = (1/N) * |X[k]|^2
-    Bins de frecuencia positivos: K = floor(N/2)
+    Bins de frecuencia positivos: K = floor(N_fft/2)
     """
     N = len(x)
-    # X[k] mediante Transformada de Fourier Discreta
-    X_k = np.fft.fft(x)
+    N_fft = 10000  # Zero-padding para alta resolución de frecuencia
     
-    # Cálculo del periodograma I(f_k)
+    # X[k] mediante Transformada de Fourier Discreta
+    X_k = np.fft.fft(x, n=N_fft)
+    
+    # Cálculo del periodograma I(f_k) manteniendo el factor de escala original N
     I_fk = (1 / N) * (np.abs(X_k)**2)
     
     # Cálculo estricto de K para los bins positivos
-    K = int(np.floor(N / 2))
+    K = int(np.floor(N_fft / 2))
     
-    # Vector de frecuencias
-    f_k = np.arange(K + 1) / N
+    # Vector de frecuencias basado en N_fft
+    f_k = np.arange(K + 1) / N_fft
     
     return f_k, I_fk[:K + 1]
 
