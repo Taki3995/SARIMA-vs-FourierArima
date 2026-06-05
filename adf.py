@@ -29,14 +29,21 @@ def ejecutar_test_adf(serie, max_lag, alpha):
     for i in range(max_lag):
         X[:, 2 + i] = dy[max_lag - 1 - i : -1 - i] # Rezagos de las diferencias
         
-    # Estimación OLS: beta = (X^T X)^-1 X^T Y
+    # Estimación vía Pseudo-inversa por SVD: V * S^-1 * U^T
     try:
-        XTX_inv = np.linalg.inv(np.dot(X.T, X))
-    except np.linalg.LinAlgError:
-        return 1.0, -2.86 # Falla por matriz singular
+        U, S, VT = np.linalg.svd(X, full_matrices=False)
         
-    beta = np.dot(np.dot(XTX_inv, X.T), Y)
-    
+        # Pseudo-inversa de X para calcular beta
+        S_inv = np.where(S > 1e-10, 1.0 / S, 0.0)
+        X_pinv = np.dot(VT.T, np.dot(np.diag(S_inv), U.T))
+        beta = np.dot(X_pinv, Y)
+        
+        # Matriz (X^T X)^-1 para la covarianza: V * S^-2 * V^T
+        S_inv2 = np.where(S > 1e-10, 1.0 / (S**2), 0.0)
+        XTX_inv = np.dot(VT.T, np.dot(np.diag(S_inv2), VT))
+    except np.linalg.LinAlgError:
+        return 1.0, -2.86 # Falla por no convergencia de SVD
+        
     # Residuos y grados de libertad
     e = Y - np.dot(X, beta)
     df = n_samples - (2 + max_lag)
