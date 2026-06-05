@@ -43,7 +43,7 @@ def construir_matriz_fourier(t_n, T_p, K_p):
 # =============================================================================
 
 def sarima_fase_1(w, K_a):
-    """Phase I: Estimación de Residuos vía AR(K_a)"""
+    """Phase I: Estimación de Residuos vía AR(K_a) usando Pseudo-inversa SVD"""
     n_samples = len(w) - K_a
     if n_samples <= 0:
         return None, None
@@ -56,7 +56,11 @@ def sarima_fase_1(w, K_a):
         Z[t, :] = w[t : t + K_a][::-1] 
         
     try:
-        Gamma_hat = np.dot(np.dot(np.linalg.inv(np.dot(Z.T, Z)), Z.T), Y)
+        # Reemplazo de la inversa clásica por el método de Pseudo-inversa vía SVD
+        U, S_vals, VT = np.linalg.svd(Z, full_matrices=False)
+        S_inv = np.where(S_vals > 1e-10, 1.0 / S_vals, 0.0)
+        Z_pinv = np.dot(VT.T, np.dot(np.diag(S_inv), U.T))
+        Gamma_hat = np.dot(Z_pinv, Y)
     except np.linalg.LinAlgError:
         return None, None
         
@@ -183,15 +187,19 @@ def grid_search_sarima(w, p_max, q_max, P_max, Q_max, s, K_a, lam):
 # 3. ALGORITMOS F-ARIMA
 # =============================================================================
 
-def entrenar_farima(y, d, K_p_max, p_max, q_max, K_a, lam):
+def entrenar_farima(y, d, K_p_max, p_max, q_max, K_a, lam, s):
     """Entrena Fourier (Periodograma + OLS-Penalizado) y modela el residuo con ARIMA(p,d,q)"""
-    f_k, I_fk = periodograma(y)
+    
+    # Se añade la frecuencia de muestreo 's'
+    f_k, I_fk = periodograma(y, f_s=s)
     
     # Excluir frecuencia 0 (media continua) para buscar la frecuencia fundamental
     I_fk[0] = 0
     idx_max = np.argmax(I_fk)
     f_max = f_k[idx_max]
-    T_p = 1.0 / f_max if f_max > 0 else len(y)
+    
+    # Convertir frecuencia física al período en formato de muestras (T_p)
+    T_p = (1.0 / f_max) * s if f_max > 0 else len(y)
     
     t_n = np.arange(len(y))
     
@@ -264,8 +272,8 @@ if __name__ == "__main__":
     w_train = diferenciar_serie(y_train, d, D, s)
     modelo_sarima = grid_search_sarima(w_train, p_max, q_max, P_max, Q_max, s, K_a, lam)
     
-    # 4. Entrenar F-ARIMA
-    modelo_farima = entrenar_farima(y_train, d, K_p_max, p_max, q_max, K_a, lam)
+    # 4. Entrenar F-ARIMA (Se añade s como argumento para calcular periodos)
+    modelo_farima = entrenar_farima(y_train, d, K_p_max, p_max, q_max, K_a, lam, s)
     
     # 5. Guardar resultados en CSV usando solo Pandas (Sin Json)
     resultados = {
