@@ -103,7 +103,7 @@ if __name__ == "__main__":
     y_full = datos.iloc[:, 1].values
     
     train_size = 0.8
-    K_a = 15 # Debe coincidir con el usado en trn.py
+    K_a = 72 # Debe coincidir con el usado en trn.py
     
     start_index = int(len(y_full) * train_size)
     end_index = len(y_full)

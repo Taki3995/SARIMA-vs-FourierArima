@@ -242,7 +242,7 @@ if __name__ == "__main__":
     q_max = 2
     P_max = 1
     Q_max = 1
-    K_a = 15
+    K_a = 72
     lam = 0.01
     K_p_max = 5
     
