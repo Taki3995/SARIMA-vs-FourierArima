@@ -204,6 +204,10 @@ def entrenar_farima(y, d, K_p_max, p_max, q_max, K_a, lam, s):
     
     t_n = np.arange(len(y))
     
+    # --- CORRECCIÓN NUEVA: CENTRADO DE LA SERIE ---
+    y_mean = np.mean(y)
+    y_centered = y - y_mean
+    
     best_aic_fourier = np.inf
     best_Kp = 1
     best_gamma = None
@@ -211,10 +215,15 @@ def entrenar_farima(y, d, K_p_max, p_max, q_max, K_a, lam, s):
     
     for K_p in range(1, K_p_max + 1):
         X = construir_matriz_fourier(t_n, T_p, K_p)
-        gamma_hat = estimar_gamma_farima(X, y, lam).flatten()
+        
+        # Estimar coeficientes usando la serie centrada en lugar de y original
+        gamma_hat = estimar_gamma_farima(X, y_centered, lam).flatten()
         
         pred = np.dot(X, gamma_hat)
-        res = y - pred
+        res = y_centered - pred
+        
+        # Sumar nuevamente la media global a los residuos para recuperar la estructura de y
+        res_con_media = res + y_mean
         
         sse = np.sum(res**2)
         n_eval = len(y)
@@ -226,7 +235,7 @@ def entrenar_farima(y, d, K_p_max, p_max, q_max, K_a, lam, s):
             best_aic_fourier = aic
             best_Kp = K_p
             best_gamma = gamma_hat
-            best_residuals = res
+            best_residuals = res_con_media
             
     # Componente ARIMA(p,d,q) sobre los residuos. Lógica SARIMA con D=0, s=0
     w_residuals = diferenciar_serie(best_residuals, d, 0, 0)
