@@ -190,9 +190,13 @@ def grid_search_sarima(w, p_max, q_max, P_max, Q_max, s, K_a, lam):
 def entrenar_farima(y, d, K_p_max, p_max, q_max, K_a, lam, s):
     """Entrena Fourier (Periodograma + OLS-Penalizado) y modela el residuo con ARIMA(p,d,q)"""
     
-    # Corrección 1: Pasar la serie diferenciada para eliminar fuga espectral
-    y_diff = np.diff(y)
-    f_k, I_fk = periodograma(y_diff, f_s=s)
+    t_n = np.arange(len(y))
+    
+    # Corrección 1: Detrending lineal para evitar fuga espectral en reemplazo de np.diff
+    slope, intercept = np.polyfit(t_n, y, 1)
+    y_detrended = y - (slope * t_n + intercept)
+    
+    f_k, I_fk = periodograma(y_detrended, f_s=s)
     
     # Excluir frecuencia 0 (media continua) para buscar la frecuencia fundamental
     I_fk[0] = 0
@@ -202,9 +206,7 @@ def entrenar_farima(y, d, K_p_max, p_max, q_max, K_a, lam, s):
     # Convertir frecuencia física al período en formato de muestras (T_p)
     T_p = (1.0 / f_max) * s if f_max > 0 else len(y)
     
-    t_n = np.arange(len(y))
-    
-    # --- CORRECCIÓN NUEVA: CENTRADO DE LA SERIE ---
+    # --- CENTRADO DE LA SERIE ---
     y_mean = np.mean(y)
     y_centered = y - y_mean
     
@@ -282,8 +284,8 @@ if __name__ == "__main__":
     w_train = diferenciar_serie(y_train, d, D, s)
     modelo_sarima = grid_search_sarima(w_train, p_max, q_max, P_max, Q_max, s, K_a, lam)
     
-    # 4. Entrenar F-ARIMA (Corrección 2: Sumar D a d para la estacionariedad del residuo de Fourier)
-    modelo_farima = entrenar_farima(y_train, d + D, K_p_max, p_max, q_max, K_a, lam, s)
+    # 4. Entrenar F-ARIMA (Corrección 2: Usar solo d para la estacionariedad del residuo de Fourier)
+    modelo_farima = entrenar_farima(y_train, d, K_p_max, p_max, q_max, K_a, lam, s)
     
     # 5. Guardar resultados en CSV usando solo Pandas (Sin Json)
     resultados = {
