@@ -168,7 +168,9 @@ if __name__ == "__main__":
     
     # El residuo de Fourier es la serie a modelar con ARIMA(p,d,q)
     residual_fourier = y_full - F_full
-    w_true_farima = diferenciar_serie_pad(residual_fourier, d, 0, 0)
+    
+    # Corrección: Se suma d + D para alinearse con la integración residual del entrenamiento
+    w_true_farima = diferenciar_serie_pad(residual_fourier, d + D, 0, 0)
     eps_true_farima = calcular_residuos_empiricos(w_true_farima, K_a, Gamma_farima)
     
     y_pred_farima = []
@@ -178,8 +180,8 @@ if __name__ == "__main__":
         if np.isnan(eta_hat_t):
             y_pred_farima.append(np.nan)
         else:
-            # Recuperar el residuo al dominio original
-            residual_hat_t = recuperar_sarima(eta_hat_t, residual_fourier, t, d, 0, 0)
+            # Corrección: Recuperar el residuo al dominio original usando d + D
+            residual_hat_t = recuperar_sarima(eta_hat_t, residual_fourier, t, d + D, 0, 0)
             
             # Predicción Final = Componente Fourier + Componente Residual ARIMA
             y_hat_t = F_full[t] + residual_hat_t
