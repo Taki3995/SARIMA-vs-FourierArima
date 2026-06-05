@@ -43,23 +43,17 @@ def construir_matriz_fourier(t_n, T_p, K_p):
 def sarima_fase_1(w, K_a):
     """
     Phase I: Estimación de Residuos vía AR(K_a) usando Pseudo-inversa SVD.
-
-    CORRECCIÓN: el loop anterior construía Z[t,:] = w[t:t+K_a][::-1],
-    que usaba w[t], w[t+1], ..., w[t+K_a-1] — valores presentes y futuros.
-    El regresor en el instante t debe ser z_t = [w_{t-1}, ..., w_{t-Ka}].
-    El loop correcto itera t desde K_a hasta len(w)-1 y toma la ventana
-    pasada w[t-1 : t-K_a-1 : -1].
     """
     n_samples = len(w) - K_a
     if n_samples <= 0:
         return None, None
 
-    Y = w[K_a:]                         # w_{K_a}, w_{K_a+1}, ..., w_{T-1}
+    Y = w[K_a:]                                 # w_{K_a}, w_{K_a+1}, ..., w_{T-1}
     Z = np.zeros((n_samples, K_a))
 
     for t in range(K_a, len(w)):
-        # z_t = [w_{t-1}, w_{t-2}, ..., w_{t-K_a}]  ← ventana estrictamente pasada
-        Z[t - K_a, :] = w[t - 1 : t - K_a - 1 : -1]
+        # z_t = [w_{t-1}, w_{t-2}, ..., w_{t-K_a}]  ← ventana estrictamente pasada extraída con slicing seguro
+        Z[t - K_a, :] = w[t - K_a : t][::-1]
 
     try:
         U, S_vals, VT = np.linalg.svd(Z, full_matrices=False)
@@ -75,11 +69,6 @@ def sarima_fase_1(w, K_a):
 def construir_conjuntos_retardo(p, q, P, Q, s):
     """
     Construye los conjuntos de rezagos L_A y L_M.
-
-    CORRECCIÓN: cuando s=0 (caso ARIMA puro en F-ARIMA), j*s = 0 para
-    cualquier j, lo que añadía el lag 0 a L_A y L_M — es decir, w_t y
-    ε_t actuales como regresores de sí mismos (data leakage).
-    Se filtra cualquier lag <= 0 antes de añadirlo al conjunto.
     """
     s = int(s)
 
@@ -177,8 +166,6 @@ def grid_search_sarima(w, p_max, q_max, P_max, Q_max, s, K_a, lam):
                     if eta_hat is None:
                         continue
 
-                    # CORRECCIÓN: estimar_eta_sarima ya devuelve vector 1-D;
-                    # .flatten() eliminado para evitar errores silenciosos de shape.
                     sse, n_eval = reconstruir_w_y_calcular_sse(
                         w, epsilon_hat, K_a, L_A, L_M, eta_hat
                     )
@@ -218,8 +205,6 @@ def entrenar_farima(y, d, K_p_max, p_max, q_max, K_a, lam, s):
     slope, intercept = np.polyfit(t_n, y, 1)
     y_detrended = y - (slope * t_n + intercept)
 
-    # CORRECCIÓN: se usa f_s=1 (ciclos/muestra) para que T_p = 1/f_max
-    # directamente en muestras, sin depender de que f_s == s.
     f_k, I_fk = periodograma(y_detrended, f_s=1.0)
 
     # Excluir frecuencia 0 (componente DC) para buscar la frecuencia fundamental
@@ -260,7 +245,6 @@ def entrenar_farima(y, d, K_p_max, p_max, q_max, K_a, lam, s):
             best_residuals   = res_con_media
 
     # Componente ARIMA(p,d,q) sobre los residuos.
-    # Se pasa s=1 para evitar el data leakage por lag 0 cuando s=0.
     w_residuals = diferenciar_serie(best_residuals, d, 0, 0)
     arima_res   = grid_search_sarima(w_residuals, p_max, q_max, 0, 0, 1, K_a, lam)
 
@@ -287,9 +271,6 @@ if __name__ == "__main__":
     lam        = 0.01
     K_p_max    = 5
 
-    # CORRECCIÓN: adf.csv ahora tiene múltiples filas (una por iteración ADF).
-    # Los valores finales d_final, D_final, s son iguales en todas las filas;
-    # se lee la última para obtener el resultado convergido.
     adf_results = pd.read_csv("adf.csv")
     d = int(adf_results['d_final'].iloc[-1])
     D = int(adf_results['D_final'].iloc[-1])
