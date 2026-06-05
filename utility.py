@@ -63,10 +63,10 @@ def estimar_gamma_farima(X, Y, lam):
 # 3. FUNCIONES SARIMA
 # =============================================================================
 
-def estimar_eta_sarima(X_t_array, w_array):
+def estimar_eta_sarima(X_t_array, w_array, lam):
     """
-    Estima la representación lineal expandida (Fase II) vía OLS estándar.
-    Fórmula: eta_hat = (sum X_t X_t^T)^-1 (sum X_t w_t)
+    Estima la representación lineal expandida (Fase II) vía OLS Regularizado (Ridge).
+    Fórmula: eta_hat = (sum X_t X_t^T + lambda I)^-1 (sum X_t w_t)
     """
     if len(X_t_array) == 0:
         return None
@@ -86,7 +86,9 @@ def estimar_eta_sarima(X_t_array, w_array):
         sum_Xw += X_t * w_t
         
     try:
-        mat_inv = np.linalg.inv(sum_XX)
+        # Corrección: Añadir la regularización Ridge (lambda I) a la matriz de diseño
+        I = np.eye(m)
+        mat_inv = np.linalg.inv(sum_XX + lam * I)
     except np.linalg.LinAlgError:
         return None # Falla por matriz singular en OLS
         
@@ -144,7 +146,7 @@ def calc_mnse(real, pred):
 def calc_mape(real, pred):
     """
     Calcula el Error Porcentual Absoluto Medio (MAPE).
-    Fórmula: MAPE = (100 / N) * sum(|(real - pred) / real|)
+    Fórmula: MAPE = mean(|(real - pred) / real|)
     """
     real = np.array(real)
     pred = np.array(pred)
@@ -158,7 +160,8 @@ def calc_mape(real, pred):
     if n == 0:
         return np.nan
         
-    mape = (100.0 / n) * np.sum(np.abs((real_safe - pred_safe) / real_safe))
+    # Corrección: Se elimina el multiplicador porcentual innecesario
+    mape = (1.0 / n) * np.sum(np.abs((real_safe - pred_safe) / real_safe))
     return mape
 
 def test_jarque_bera(residuos):
