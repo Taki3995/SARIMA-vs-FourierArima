@@ -25,10 +25,10 @@ def combinatoria(n, k):
 # 2. FUNCIONES F-ARIMA
 # =============================================================================
 
-def periodograma(x):
+def periodograma(x, f_s=1.0):
     """
     Calcula el Periodograma de una serie de tiempo.
-    Fórmula: I(f_k) = (1/N) * |X[k]|^2
+    Fórmula: I(f_k) = (1/N) * |X[k]|^2, f_k = k * f_s / N
     Bins de frecuencia positivos: K = floor(N/2)
     """
     N = len(x)
@@ -41,8 +41,8 @@ def periodograma(x):
     # Cálculo estricto de K para los bins positivos
     K = int(np.floor(N / 2))
     
-    # Vector de frecuencias
-    f_k = np.arange(K + 1) / N
+    # Vector de frecuencias incorporando la frecuencia de muestreo f_s
+    f_k = (np.arange(K + 1) * f_s) / N
     
     return f_k, I_fk[:K + 1]
 
