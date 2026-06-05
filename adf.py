@@ -74,41 +74,27 @@ def diferenciar_ordinaria(serie):
     """(1 - L)y_t = y_t - y_{t-1}"""
     return np.diff(serie, n=1)
 
-def diferenciar_estacional(serie, s):
-    """(1 - L^s)y_t = y_t - y_{t-s}"""
-    return serie[s:] - serie[:-s]
-
 # =============================================================================
 # 3. LÓGICA PRINCIPAL DE INTEGRACIÓN
 # =============================================================================
 
-def buscar_ordenes_integracion(serie, s, alpha, max_lag):
+def buscar_orden_integracion(serie, alpha, max_lag):
     """
-    Busca orden estacional (D) y ordinario (d) comparando el estadístico
+    Busca el orden ordinario (d) comparando el estadístico
     t_stat con el valor crítico cv. Condición de raíz unitaria: t_stat >= cv.
     """
     serie_actual = np.array(serie.copy())
-    
-    D = 0
     d = 0
     
-    # 1. Buscar orden estacional (D)
     t_stat, cv = ejecutar_test_adf(serie_actual, max_lag, alpha)
     
-    while t_stat >= cv and D < 3:
-        serie_actual = diferenciar_estacional(serie_actual, s)
-        D += 1
-        t_stat, cv = ejecutar_test_adf(serie_actual, max_lag, alpha)
-        
-    # 2. Buscar orden ordinario (d)
-    t_stat, cv = ejecutar_test_adf(serie_actual, max_lag, alpha)
-    
+    # Buscar orden ordinario (d) hasta un máximo lógico (ej. 3)
     while t_stat >= cv and d < 3:
         serie_actual = diferenciar_ordinaria(serie_actual)
         d += 1
         t_stat, cv = ejecutar_test_adf(serie_actual, max_lag, alpha)
         
-    return d, D
+    return d
 
 # =============================================================================
 # 4. EJECUCIÓN PRINCIPAL
@@ -121,22 +107,19 @@ if __name__ == "__main__":
     # Parámetros fijos de configuración para la búsqueda
     alpha = 0.05
     max_lag = 12
-    s = 12
     
     # Leer datos (Corrección aplicada: header=None y selección de la columna 1)
     datos = pd.read_csv(data_path, header=None)
     serie = datos.iloc[:, 1].values 
     
-    # Ejecutar búsqueda de órdenes
-    d, D = buscar_ordenes_integracion(serie, s, alpha, max_lag)
+    # Ejecutar búsqueda de orden
+    d = buscar_orden_integracion(serie, alpha, max_lag)
     
     # Guardar resultados
     resultados = pd.DataFrame({
-        'd': [d],
-        'D': [D],
-        's': [s]
+        'd': [d]
     })
     
     resultados.to_csv(output_path, index=False)
-    print(f"Órdenes de integración calculados: d={d}, D={D}")
+    print(f"Orden de integración calculado: d={d}")
     print(f"Resultados guardados en {output_path}")
