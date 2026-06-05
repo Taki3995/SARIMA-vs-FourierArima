@@ -149,7 +149,8 @@ def grid_search_sarima(w, p_max, q_max, P_max, Q_max, s, K_a, lam):
                         X_t_array.append(x_A_t + x_M_t)
                         w_array.append(w[t])
                         
-                    eta_hat = estimar_eta_sarima(X_t_array, w_array)
+                    # Corrección: Se añade el parámetro lam a la invocación de la función
+                    eta_hat = estimar_eta_sarima(X_t_array, w_array, lam)
                     if eta_hat is None:
                         continue
                         
