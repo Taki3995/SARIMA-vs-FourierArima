@@ -285,4 +285,16 @@ if __name__ == "__main__":
                 str(modelo_farima['arima_model']['eta']) if modelo_farima['arima_model'] else ''],
         'L_A': [str(modelo_sarima['L_A']) if modelo_sarima else '', 
                 str(modelo_farima['arima_model']['L_A']) if modelo_farima['arima_model'] else ''],
-        'L_M': [str(modelo_sarima['L_M']) if modelo_sarima else '',
+        'L_M': [str(modelo_sarima['L_M']) if modelo_sarima else '', 
+                str(modelo_farima['arima_model']['L_M']) if modelo_farima['arima_model'] else ''],
+        'Gamma_hat_Phase1': [str(modelo_sarima['Gamma_hat']) if modelo_sarima else '',
+                             str(modelo_farima['arima_model']['Gamma_hat']) if modelo_farima['arima_model'] else ''],
+        'T_p': [np.nan, modelo_farima['T_p']],
+        'K_p': [np.nan, modelo_farima['K_p']],
+        'gamma': [np.nan, str(modelo_farima['gamma'])]
+    }
+    
+    df_resultados = pd.DataFrame(resultados)
+    df_resultados.to_csv("train.csv", index=False)
+    
+    print("Entrenamiento finalizado. Resultados de configuración guardados en train.csv")
