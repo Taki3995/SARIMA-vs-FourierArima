@@ -190,8 +190,9 @@ def grid_search_sarima(w, p_max, q_max, P_max, Q_max, s, K_a, lam):
 def entrenar_farima(y, d, K_p_max, p_max, q_max, K_a, lam, s):
     """Entrena Fourier (Periodograma + OLS-Penalizado) y modela el residuo con ARIMA(p,d,q)"""
     
-    # Se añade la frecuencia de muestreo 's'
-    f_k, I_fk = periodograma(y, f_s=s)
+    # Corrección 1: Pasar la serie diferenciada para eliminar fuga espectral
+    y_diff = np.diff(y)
+    f_k, I_fk = periodograma(y_diff, f_s=s)
     
     # Excluir frecuencia 0 (media continua) para buscar la frecuencia fundamental
     I_fk[0] = 0
@@ -272,8 +273,8 @@ if __name__ == "__main__":
     w_train = diferenciar_serie(y_train, d, D, s)
     modelo_sarima = grid_search_sarima(w_train, p_max, q_max, P_max, Q_max, s, K_a, lam)
     
-    # 4. Entrenar F-ARIMA (Se añade s como argumento para calcular periodos)
-    modelo_farima = entrenar_farima(y_train, d, K_p_max, p_max, q_max, K_a, lam, s)
+    # 4. Entrenar F-ARIMA (Corrección 2: Sumar D a d para la estacionariedad del residuo de Fourier)
+    modelo_farima = entrenar_farima(y_train, d + D, K_p_max, p_max, q_max, K_a, lam, s)
     
     # 5. Guardar resultados en CSV usando solo Pandas (Sin Json)
     resultados = {
@@ -284,16 +285,4 @@ if __name__ == "__main__":
                 str(modelo_farima['arima_model']['eta']) if modelo_farima['arima_model'] else ''],
         'L_A': [str(modelo_sarima['L_A']) if modelo_sarima else '', 
                 str(modelo_farima['arima_model']['L_A']) if modelo_farima['arima_model'] else ''],
-        'L_M': [str(modelo_sarima['L_M']) if modelo_sarima else '', 
-                str(modelo_farima['arima_model']['L_M']) if modelo_farima['arima_model'] else ''],
-        'Gamma_hat_Phase1': [str(modelo_sarima['Gamma_hat']) if modelo_sarima else '',
-                             str(modelo_farima['arima_model']['Gamma_hat']) if modelo_farima['arima_model'] else ''],
-        'T_p': [np.nan, modelo_farima['T_p']],
-        'K_p': [np.nan, modelo_farima['K_p']],
-        'gamma': [np.nan, str(modelo_farima['gamma'])]
-    }
-    
-    df_resultados = pd.DataFrame(resultados)
-    df_resultados.to_csv("train.csv", index=False)
-    
-    print("Entrenamiento finalizado. Resultados de configuración guardados en train.csv")
+        'L_M': [str(modelo_sarima['L_M']) if modelo_sarima else '',
