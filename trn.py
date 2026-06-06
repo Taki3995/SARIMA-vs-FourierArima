@@ -205,7 +205,7 @@ if __name__ == '__main__':
 
     w_train = diferenciar_serie(y_train, d, D, s)
     modelo_sarima = ajustar_sarima(w_train, p_max, q_max, P_max, Q_max, s, K_a)
-    modelo_farima = ajustar_farima(y_train, d, D, K_p_max, p_max, q_max, P_max, Q_max, K_a, lam, s)
+    modelo_farima = ajustar_farima(y_train, d, K_p_max, p_max, q_max, P_max, Q_max, K_a, lam, s)
 
     resultados = [
         {
