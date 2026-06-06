@@ -1,213 +1,253 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from utility import recuperar_sarima, calc_mnse, calc_mape, test_jarque_bera, calc_acf
 
 # =============================================================================
-# 1. FUNCIONES MATEMÁTICAS AUXILIARES (Sin módulo math)
+# 1. FUNCIONES DE PARSEO (Sin librerías externas)
 # =============================================================================
 
-def factorial(n):
-    """Calcula el factorial de un número entero."""
-    if n == 0 or n == 1:
-        return 1
-    res = 1
-    for i in range(2, int(n) + 1):
-        res *= i
-    return res
-
-def combinatoria(n, k):
-    """Calcula el coeficiente binomial (n sobre k)."""
-    if k < 0 or k > n:
-        return 0
-    return factorial(n) // (factorial(k) * factorial(n - k))
+def parse_list(s_val):
+    """Parsea un string de array a una lista de floats sin usar ast ni json."""
+    if pd.isna(s_val): return []
+    s_val = str(s_val).strip()
+    if s_val in ('', '[]', 'None', 'nan'): return []
+    s_val = s_val.replace('[', '').replace(']', '').replace('\n', '')
+    return [float(x.strip()) for x in s_val.split(',') if x.strip() != '']
 
 # =============================================================================
-# 2. FUNCIONES F-ARIMA
+# 2. FUNCIONES DE PROCESAMIENTO TEMPORAL
 # =============================================================================
 
-def periodograma(x, f_s=1.0):
+def diferenciar_serie_pad(y, d, D, s):
     """
-    Calcula el Periodograma de una serie de tiempo.
-    Fórmula: I(f_k) = (1/N) * |X[k]|^2, f_k = k * f_s / N
-    Bins de frecuencia positivos: K = floor(N/2)
+    Diferencia la serie manteniendo la longitud original (rellenando con NaN).
+    Permite alinear exactamente el índice temporal t entre y_t y w_t.
     """
-    N = len(x)
-    X_k = np.fft.fft(x)
-    I_fk = (1 / N) * (np.abs(X_k)**2)
-    K = int(np.floor(N / 2))
-    f_k = (np.arange(K + 1) * f_s) / N
-    return f_k, I_fk[:K + 1]
-
-def estimar_gamma_farima(X, Y, lam):
-    """
-    Estima los coeficientes de Fourier por OLS-Penalizado.
-    Fórmula: Gamma_hat = (X^T X + lambda I)^-1 X^T Y
-    """
-    I = np.eye(X.shape[1])
-    A = np.dot(X.T, X) + lam * I   # (X^T X + lambda I)
-    b = np.dot(X.T, Y)             # X^T Y
+    w = np.array(y, dtype=float)
     
-    # CORRECCIÓN: Aplicación explícita de la matriz inversa para respetar 
-    # rigurosamente el modelo matemático del taller.
-    inv_A = np.linalg.inv(A)
-    gamma_hat = np.dot(inv_A, b)
-    
-    return gamma_hat
+    # Diferenciación estacional
+    for _ in range(int(D)):
+        w_new = np.full_like(w, np.nan)
+        w_new[s:] = w[s:] - w[:-s]
+        w = w_new
+        
+    # Diferenciación ordinaria
+    for _ in range(int(d)):
+        w_new = np.full_like(w, np.nan)
+        w_new[1:] = w[1:] - w[:-1]
+        w = w_new
+        
+    return w
 
-# =============================================================================
-# 3. FUNCIONES SARIMA
-# =============================================================================
-
-def estimar_eta_sarima(X_t_array, w_array, lam):
+def calcular_residuos_empiricos(w, K_a, Gamma):
     """
-    Estima la representación lineal expandida (Fase II) vía OLS Regularizado (Ridge).
-    Fórmula: eta_hat = (sum X_t X_t^T + lambda I)^-1 (sum X_t w_t)
+    Calcula los residuos empíricos epsilon_hat para toda la serie.
+    Fórmula: epsilon_t = w_t - sum_{j=1}^{K_a} Gamma_j * w_{t-j}
     """
-    if len(X_t_array) == 0:
-        return None
-
-    m = len(X_t_array[0])
-
-    sum_XX = np.zeros((m, m))
-    sum_Xw = np.zeros(m)
-
-    for t in range(len(X_t_array)):
-        X_t = np.array(X_t_array[t])   # vector 1-D de dimensión m
-        w_t = w_array[t]
-        sum_XX += np.outer(X_t, X_t)   # X_t X_t^T
-        sum_Xw += X_t * w_t            # X_t w_t
-
-    try:
-        I = np.eye(m)
-        # CORRECCIÓN: Aplicación explícita de la matriz inversa para respetar 
-        # rigurosamente el modelo matemático de OLS expandido.
-        inv_A = np.linalg.inv(sum_XX + lam * I)
-        eta_hat = np.dot(inv_A, sum_Xw)
-    except np.linalg.LinAlgError:
-        return None
-
-    return eta_hat  # vector 1-D de dimensión m
-
-def recuperar_sarima(w_t, y_past, t, d, D, s):
-    """
-    Recupera el valor original y_t usando el Teorema del Binomio de Newton.
-    Fórmula: y_t = w_t - sum_{i=0..d, j=0..D, (i,j)!=(0,0)}
-                         (-1)^{i+j} * C(d,i) * C(D,j) * y_{t-i-j*s}
-    """
-    suma = 0.0
-    for i in range(int(d) + 1):
-        for j in range(int(D) + 1):
-            if i == 0 and j == 0:
-                continue
-
-            signo   = (-1) ** (i + j)
-            coef_d  = combinatoria(d, i)
-            coef_D  = combinatoria(D, j)
-            idx_pasado = t - i - j * int(s)
-
-            # CORRECCIÓN: Aplicación vectorial directa sobre la serie pasada.
-            # Se eliminan comprobaciones de diccionarios para mantener pureza algebraica.
-            if idx_pasado < 0 or idx_pasado >= len(y_past):
-                return np.nan
+    epsilon = np.full_like(w, np.nan)
+    if len(Gamma) == 0:
+        return epsilon
+        
+    for t in range(K_a, len(w)):
+        # Verificar que no haya NaNs en la ventana requerida
+        if not np.isnan(w[t - K_a : t + 1]).any():
+            z_t = w[t - K_a : t][::-1] # [w_{t-1}, w_{t-2}, ..., w_{t-K_a}]
+            epsilon[t] = w[t] - np.dot(z_t, Gamma)
             
-            y_val = y_past[idx_pasado]
-            suma += signo * coef_d * coef_D * y_val
+    return epsilon
 
-    return w_t - suma
+def construir_matriz_fourier(t_n, T_p, K_p):
+    """Construye la matriz de diseño de Fourier para toda la serie temporal."""
+    n_samples = len(t_n)
+    X = np.zeros((n_samples, int(2 * K_p)))
+    for k in range(1, int(K_p) + 1):
+        arg = (2 * np.pi * k * t_n) / T_p
+        X[:, 2*(k-1)] = np.cos(arg)
+        X[:, 2*(k-1) + 1] = np.sin(arg)
+    return X
 
 # =============================================================================
-# 4. MÉTRICAS Y TESTS ESTADÍSTICOS
+# 3. LÓGICA DE PREDICCIÓN ONE-STEP-AHEAD
 # =============================================================================
 
-def calc_mnse(real, pred):
+def predecir_arima_step(w_true, epsilon_true, t, L_A, L_M, eta):
     """
-    Calcula la Eficiencia de Nash-Sutcliffe Modificada (mNSE).
-    Fórmula: mNSE = 1 - ( sum(|e_n|) / sum(|x_n - mean(x)|) )
+    Calcula la predicción w_hat_t usando los retardos pasados verdaderos.
     """
-    real = np.array(real)
-    pred = np.array(pred)
-    numerador   = np.sum(np.abs(real - pred))
-    denominador = np.sum(np.abs(real - np.mean(real)))
-    if denominador == 0:
+    x_A_t = []
+    for l in L_A:
+        idx = t - int(l)
+        x_A_t.append(w_true[idx] if idx >= 0 else np.nan)
+        
+    x_M_t = []
+    for l in L_M:
+        idx = t - int(l)
+        x_M_t.append(epsilon_true[idx] if idx >= 0 else np.nan)
+        
+    X_t = np.array(x_A_t + x_M_t)
+    
+    if np.isnan(X_t).any():
         return np.nan
-    return 1.0 - (numerador / denominador)
+        
+    return np.dot(X_t, eta)
 
-def calc_mape(real, pred):
-    """
-    Calcula el Error Porcentual Absoluto Medio (MAPE).
-    Fórmula del taller: MAPE = mean(|e(n)/x(n)|)
-    """
-    real = np.array(real)
-    pred = np.array(pred)
-    mask = real != 0
-    real_safe = real[mask]
-    pred_safe = pred[mask]
-    n = len(real_safe)
-    if n == 0:
-        return np.nan
-    return (1.0 / n) * np.sum(np.abs((real_safe - pred_safe) / real_safe))
+# =============================================================================
+# 4. EJECUCIÓN PRINCIPAL
+# =============================================================================
 
-def test_jarque_bera(residuos):
-    """
-    Calcula el estadístico de Jarque-Bera y evalúa la normalidad.
-    Fórmulas:
-      S  = m3 / m2^(3/2)          (asimetría muestral)
-      K  = m4 / m2^2               (curtosis muestral)
-      JB = (N/6) * (S^2 + (K-3)^2/4)
-    """
-    res = np.array(residuos)
-    n = len(res)
-    if n == 0:
-        return {'jb_stat': np.nan, 'critico_5pct': 5.991,
-                'rechaza_H0': None, 'conclusion': 'Sin datos'}
-
-    media = np.mean(res)
-    m2 = np.sum((res - media) ** 2) / n
-    m3 = np.sum((res - media) ** 3) / n
-    m4 = np.sum((res - media) ** 4) / n
-
-    if m2 == 0:
-        return {'jb_stat': np.nan, 'critico_5pct': 5.991,
-                'rechaza_H0': None, 'conclusion': 'Varianza cero'}
-
-    S  = m3 / (m2 ** 1.5)
-    K  = m4 / (m2 ** 2)
-    jb = (n / 6.0) * (S ** 2 + ((K - 3.0) ** 2) / 4.0)
-
-    critico = 5.991          # chi²(2, alpha=0.05)
-    rechaza = bool(jb > critico)
-    conclusion = ('Residuos NO normales (se rechaza H0)'
-                  if rechaza else
-                  'Residuos normales (no se rechaza H0)')
-
-    return {
-        'jb_stat'     : float(jb),
-        'critico_5pct': critico,
-        'rechaza_H0'  : rechaza,
-        'conclusion'  : conclusion
-    }
-
-def calc_acf(residuos, lags):
-    """
-    Calcula la Función de Autocorrelación (ACF).
-    Fórmula: r_k = cov_k / var_total
-      donde cov_k = sum_{t=0}^{n-k-1} (y_t - media)(y_{t+k} - media)
-            var_total = sum_{t=0}^{n-1}  (y_t - media)^2
-    """
-    res   = np.array(residuos)
-    n     = len(res)
-    media = np.mean(res)
-    var_total = np.sum((res - media) ** 2)
-
-    if var_total == 0:
-        return np.zeros(lags + 1)
-
-    acf_vals = []
-    for k in range(lags + 1):
-        if k == 0:
-            acf_vals.append(1.0)
+if __name__ == "__main__":
+    
+    # 1. Cargar Serie de Tiempo y Variables Fijas (Corregida la lectura del CSV)
+    datos = pd.read_csv("tserie.csv", header=None)
+    y_full = datos.iloc[:, 1].values
+    
+    train_size = 0.8
+    K_a = 72 # Debe coincidir con el usado en trn.py
+    
+    start_index = int(len(y_full) * train_size)
+    end_index = len(y_full)
+    
+    t_test = np.arange(start_index, end_index)
+    y_true_test = y_full[start_index:end_index]
+    
+    # 2. Cargar resultados previos (archivos ganadores)
+    adf_results = pd.read_csv("adf.csv")
+    d = int(adf_results['d'].values[0])
+    D = int(adf_results['D'].values[0])
+    s = int(adf_results['s'].values[0])
+    
+    df_train = pd.read_csv("train.csv")
+    
+    # 3. Extraer parámetros SARIMA
+    row_sarima = df_train[df_train['modelo'] == 'SARIMA'].iloc[0]
+    eta_sarima = np.array(parse_list(row_sarima['eta']))
+    LA_sarima = parse_list(row_sarima['L_A'])
+    LM_sarima = parse_list(row_sarima['L_M'])
+    Gamma_sarima = np.array(parse_list(row_sarima['Gamma_hat_Phase1']))
+    
+    # 4. Extraer parámetros F-ARIMA
+    row_farima = df_train[df_train['modelo'] == 'FARIMA'].iloc[0]
+    T_p = float(row_farima['T_p'])
+    K_p = int(float(row_farima['K_p']))
+    gamma_fourier = np.array(parse_list(row_farima['gamma']))
+    
+    eta_farima = np.array(parse_list(row_farima['eta']))
+    LA_farima = parse_list(row_farima['L_A'])
+    LM_farima = parse_list(row_farima['L_M'])
+    Gamma_farima = np.array(parse_list(row_farima['Gamma_hat_Phase1']))
+    
+    # ---------------------------------------------------------
+    # 5. PREDICCIÓN SARIMA (One-Step-Ahead)
+    # ---------------------------------------------------------
+    # Preparar series auxiliares
+    w_true_sarima = diferenciar_serie_pad(y_full, d, D, s)
+    eps_true_sarima = calcular_residuos_empiricos(w_true_sarima, K_a, Gamma_sarima)
+    
+    y_pred_sarima = []
+    
+    for t in t_test:
+        w_hat_t = predecir_arima_step(w_true_sarima, eps_true_sarima, t, LA_sarima, LM_sarima, eta_sarima)
+        if np.isnan(w_hat_t):
+            y_pred_sarima.append(np.nan)
         else:
-            cov_k = np.sum((res[:n - k] - media) * (res[k:] - media))
-            acf_vals.append(cov_k / var_total)
-
-    return np.array(acf_vals)
+            # Recuperar al dominio original
+            y_hat_t = recuperar_sarima(w_hat_t, y_full, t, d, D, s)
+            y_pred_sarima.append(y_hat_t)
+            
+    y_pred_sarima = np.array(y_pred_sarima)
+    res_sarima = y_true_test - y_pred_sarima
+    
+    # ---------------------------------------------------------
+    # 6. PREDICCIÓN F-ARIMA (One-Step-Ahead)
+    # ---------------------------------------------------------
+    # Calcular base de Fourier para toda la serie
+    t_n_full = np.arange(len(y_full))
+    X_fourier = construir_matriz_fourier(t_n_full, T_p, K_p)
+    F_full = np.dot(X_fourier, gamma_fourier)
+    
+    # El residuo de Fourier es la serie a modelar con ARIMA(p,d,q)
+    residual_fourier = y_full - F_full
+    
+    # Corrección: Se usa solo d para alinearse con la integración residual del entrenamiento
+    w_true_farima = diferenciar_serie_pad(residual_fourier, d, 0, 0)
+    eps_true_farima = calcular_residuos_empiricos(w_true_farima, K_a, Gamma_farima)
+    
+    y_pred_farima = []
+    
+    for t in t_test:
+        eta_hat_t = predecir_arima_step(w_true_farima, eps_true_farima, t, LA_farima, LM_farima, eta_farima)
+        if np.isnan(eta_hat_t):
+            y_pred_farima.append(np.nan)
+        else:
+            # Corrección: Recuperar el residuo al dominio original usando solo d
+            residual_hat_t = recuperar_sarima(eta_hat_t, residual_fourier, t, d, 0, 0)
+            
+            # Predicción Final = Componente Fourier + Componente Residual ARIMA
+            y_hat_t = F_full[t] + residual_hat_t
+            y_pred_farima.append(y_hat_t)
+            
+    y_pred_farima = np.array(y_pred_farima)
+    res_farima = y_true_test - y_pred_farima
+    
+    # ---------------------------------------------------------
+    # 7. EVALUACIÓN Y MÉTRICAS
+    # ---------------------------------------------------------
+    
+    # Filtrar NaNs para calcular métricas
+    mask_s = ~np.isnan(y_pred_sarima)
+    mask_f = ~np.isnan(y_pred_farima)
+    
+    metrics = {
+        'Modelo': ['SARIMA', 'FARIMA'],
+        'mNSE': [calc_mnse(y_true_test[mask_s], y_pred_sarima[mask_s]), 
+                 calc_mnse(y_true_test[mask_f], y_pred_farima[mask_f])],
+        'MAPE': [calc_mape(y_true_test[mask_s], y_pred_sarima[mask_s]), 
+                 calc_mape(y_true_test[mask_f], y_pred_farima[mask_f])],
+        'Jarque-Bera': [test_jarque_bera(res_sarima[mask_s]), 
+                        test_jarque_bera(res_farima[mask_f])]
+    }
+    
+    pd.DataFrame(metrics).to_csv("test.csv", index=False)
+    print("Evaluación finalizada. Métricas guardadas en test.csv")
+    print(pd.DataFrame(metrics))
+    
+    # ---------------------------------------------------------
+    # 8. GRÁFICAS DE RESULTADOS
+    # ---------------------------------------------------------
+    
+    # Gráfica 1: Curvas Comparativas
+    plt.figure(figsize=(14, 6))
+    plt.plot(t_test, y_true_test, label='Valor Real', color='black', linewidth=2)
+    plt.plot(t_test, y_pred_sarima, label='Predicción SARIMA', linestyle='--')
+    plt.plot(t_test, y_pred_farima, label='Predicción F-ARIMA', linestyle='-.')
+    plt.title("Pronóstico One-Step-Ahead: Valor Estimado vs Valor Real")
+    plt.xlabel("Índice Temporal (Test)")
+    plt.ylabel("Valor")
+    plt.legend()
+    plt.grid(True)
+    plt.savefig("predicciones.png")
+    plt.show()
+    
+    # Gráfica 2: Función de Autocorrelación (ACF) de los residuos
+    lags = 20
+    acf_sarima = calc_acf(res_sarima[mask_s], lags)
+    acf_farima = calc_acf(res_farima[mask_f], lags)
+    lag_indices = np.arange(lags + 1)
+    
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    
+    axes[0].bar(lag_indices, acf_sarima, width=0.3, color='blue')
+    axes[0].axhline(0, color='black', linewidth=1)
+    axes[0].axhline(1.96/np.sqrt(len(res_sarima[mask_s])), color='red', linestyle='--')
+    axes[0].axhline(-1.96/np.sqrt(len(res_sarima[mask_s])), color='red', linestyle='--')
+    axes[0].set_title("ACF Residuos SARIMA")
+    
+    axes[1].bar(lag_indices, acf_farima, width=0.3, color='green')
+    axes[1].axhline(0, color='black', linewidth=1)
+    axes[1].axhline(1.96/np.sqrt(len(res_farima[mask_f])), color='red', linestyle='--')
+    axes[1].axhline(-1.96/np.sqrt(len(res_farima[mask_f])), color='red', linestyle='--')
+    axes[1].set_title("ACF Residuos F-ARIMA")
+    
+    plt.savefig("acf_residuos.png")
+    plt.show()
