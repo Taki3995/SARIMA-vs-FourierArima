@@ -248,12 +248,10 @@ if __name__ == '__main__':
     n_train = int(len(y_full) * train_size)
     y_train = y_full[:n_train]
 
-    # K_a automatico basado en la longitud del entrenamiento
     K_a = int(np.ceil(np.log(len(y_train)) * 10))
 
     w_train = diferenciar_serie(y_train, d, D, s)
 
-    # Orden maximo adaptativo via FPE
     p_optimo = orden_ar_optimo_fpe(w_train)
     p_max = min(p_optimo + 1, len(w_train) // 10)
     q_max = p_max

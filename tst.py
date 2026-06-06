@@ -111,7 +111,6 @@ if __name__ == '__main__':
     LM_farima = [int(x) for x in parse_list(row_farima['L_M'])]
     Gamma_farima = np.array(parse_list(row_farima['Gamma_hat_Phase1']))
 
-    # Extraer d_residual especifico para F-ARIMA si existe
     d_farima = int(float(row_farima['d_residual'])) if 'd_residual' in df_train.columns and not pd.isna(row_farima['d_residual']) else d
 
     w_true_sarima = diferenciar_serie_pad(y_full, d, D, s)
@@ -132,7 +131,6 @@ if __name__ == '__main__':
     F_full = np.dot(X_fourier, gamma_fourier)
     residual_fourier = y_full - F_full
 
-    # Aqui usamos el d_farima extraido
     w_true_farima = diferenciar_serie_pad(residual_fourier, d_farima, 0, 0)
     eps_true_farima = calcular_residuos_empiricos(w_true_farima, K_a, Gamma_farima)
 
@@ -142,7 +140,6 @@ if __name__ == '__main__':
         if np.isnan(eta_hat_t):
             y_pred_farima.append(np.nan)
         else:
-            # Aqui tambien usamos el d_farima para la recuperacion
             residual_hat_t = recuperar_sarima(eta_hat_t, residual_fourier, t, d_farima, 0, 0)
             y_pred_farima.append(F_full[t] + residual_hat_t)
     y_pred_farima = np.array(y_pred_farima)
