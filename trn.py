@@ -196,7 +196,7 @@ def grid_search_sarima(w, p_max, q_max, P_max, Q_max, s, K_a, lam):
 # 3. ALGORITMOS F-ARIMA
 # =============================================================================
 
-def entrenar_farima(y_train, d, p, q, T_p, K_p, lambda_reg=0.1, K_a=20):
+def entrenar_farima(y_train, d, T_p, K_p, p_max, q_max, K_a, lambda_reg=0.1):
     N = len(y_train)
     t_n = np.arange(N)
     
@@ -217,41 +217,21 @@ def entrenar_farima(y_train, d, p, q, T_p, K_p, lambda_reg=0.1, K_a=20):
     
     # PASO 4: Preparación del modelo ARIMA sobre eta_t
     w_t = np.array(eta_t.copy())
-    for _ in range(d):
+    for _ in range(int(d)):
         w_t = np.diff(w_t, n=1)
         
     # PASO 5: Estimación Two-Phase OLS (ARIMA)
-    # Fase I
-    epsilon_hat, gamma_ar = calcular_residuos_empiricos(w_t, K_a)
-    
-    # Fase II: Construcción de matriz de diseño aumentada X_t = [x_A,t ; x_M,t]
-    # (Se vectoriza para alinear w_t y los retardos p, q)
-    start_idx = max(p, q, K_a)
-    T_w = len(w_t)
-    
-    X_mat = []
-    Y_target = []
-    
-    for t in range(start_idx, T_w):
-        x_A = w_t[t-p : t][::-1]                # Retardos AR
-        x_M = epsilon_hat[t-q : t][::-1]        # Retardos MA
-        X_mat.append(np.concatenate([x_A, x_M]))
-        Y_target.append(w_t[t])
-        
-    X_mat = np.array(X_mat)
-    Y_target = np.array(Y_target)
-    
-    # Estimación final de coeficientes expandidos (eta)
-    eta_coefs = np.linalg.pinv(X_mat.T @ X_mat) @ X_mat.T @ Y_target
+    # Reutilizamos grid_search_sarima con estacionalidad P=0, Q=0, s=0 
+    # para encontrar los mejores coeficientes autoregresivos de los residuos de Fourier
+    arima_model = grid_search_sarima(w_t, p_max, q_max, 0, 0, 0, K_a, lambda_reg)
     
     return {
-        'F_t': F_t,
-        'gamma_fourier': gamma_hat,
-        'arima_eta_coefs': eta_coefs,
-        'eta_t': eta_t,
-        'd': d,
-        'p': p,
-        'q': q
+        'T_p': T_p,
+        'K_p': K_p,
+        'gamma': gamma_hat.tolist() if gamma_hat is not None else [],
+        'arima_model': arima_model,
+        'F_t': F_t.tolist(),
+        'eta_t': eta_t.tolist()
     }
 
 # =============================================================================
@@ -285,8 +265,15 @@ if __name__ == "__main__":
     w_train       = diferenciar_serie(y_train, d, D, s)
     modelo_sarima = grid_search_sarima(w_train, p_max, q_max, P_max, Q_max, s, K_a, lam)
 
+    # Periodograma para extraer T_p empírico (F-ARIMA)
+    K_bins, I_fk, f_k = periodograma(y_train)
+    # Ignorar la frecuencia 0 (continua/tendencia)
+    idx_max = np.argmax(I_fk[1:]) + 1
+    f_max = f_k[idx_max]
+    T_p_estimado = int(round(1.0 / f_max)) if f_max > 0 else s
+
     # Entrenar F-ARIMA
-    modelo_farima = entrenar_farima(y_train, d, K_p_max, p_max, q_max, K_a, lam, s)
+    modelo_farima = entrenar_farima(y_train, d, T_p_estimado, K_p_max, p_max, q_max, K_a, lam)
 
     # Guardar train.csv
     resultados = {
