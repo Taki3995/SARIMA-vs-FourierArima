@@ -133,7 +133,7 @@ def ajustar_sarima(w, p_max, q_max, P_max, Q_max, s, K_a):
     return best_result
 
 
-def ajustar_farima(y, d, K_p_max, p_max, q_max, P_max, Q_max, K_a, lam, s):
+def ajustar_farima(y, d, D, K_p_max, p_max, q_max, P_max, Q_max, K_a, lam, s):
     t_n = np.arange(len(y))
     
     y_estacionaria = diferenciar_serie(y, d, 0, 0)
@@ -159,7 +159,7 @@ def ajustar_farima(y, d, K_p_max, p_max, q_max, P_max, Q_max, K_a, lam, s):
         pred = X @ gamma_hat
         residuals = y - pred
         
-        w_residuals_aic = diferenciar_serie(residuals, d, 0, 0)
+        w_residuals_aic = diferenciar_serie(residuals, d, D, s)
         
         aic = calcular_aic(np.sum(w_residuals_aic ** 2), len(w_residuals_aic), 2 * K_p)
         
@@ -169,8 +169,8 @@ def ajustar_farima(y, d, K_p_max, p_max, q_max, P_max, Q_max, K_a, lam, s):
             best_gamma = gamma_hat
             best_residuals = residuals
 
-    w_residuals = diferenciar_serie(best_residuals, d, 0, 0)
-    arima_model = ajustar_sarima(w_residuals, p_max, q_max, 0, 0, 0, K_a)
+    w_residuals = diferenciar_serie(best_residuals, d, D, s)
+    arima_model = ajustar_sarima(w_residuals, p_max, q_max, P_max, Q_max, s, K_a)
 
     return {
         'T_p': float(T_p),
@@ -205,7 +205,7 @@ if __name__ == '__main__':
 
     w_train = diferenciar_serie(y_train, d, D, s)
     modelo_sarima = ajustar_sarima(w_train, p_max, q_max, P_max, Q_max, s, K_a)
-    modelo_farima = ajustar_farima(y_train, d, K_p_max, p_max, q_max, P_max, Q_max, K_a, lam, s)
+    modelo_farima = ajustar_farima(y_train, d, D, K_p_max, p_max, q_max, P_max, Q_max, K_a, lam, s)
 
     resultados = [
         {
