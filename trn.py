@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 
 from utility import periodograma, estimar_gamma_farima, estimar_eta_sarima
+from adf import buscar_ordenes_integracion
 
 
 def calcular_aic(sse, n_obs, n_params):
@@ -19,12 +20,16 @@ def diferenciar_serie(y, d, D, s):
     return w
 
 
-def construir_matriz_fourier(t_n, T_p, K_p):
-    X = np.zeros((len(t_n), 2 * K_p))
-    for k in range(1, K_p + 1):
-        arg = (2 * np.pi * k * t_n) / T_p
-        X[:, 2 * (k - 1)] = np.cos(arg)
-        X[:, 2 * (k - 1) + 1] = np.sin(arg)
+def construir_matriz_fourier(t_n, T_p_list, K_p):
+    num_P = len(T_p_list)
+    X = np.zeros((len(t_n), 2 * K_p * num_P))
+    col = 0
+    for T_p in T_p_list:
+        for k in range(1, K_p + 1):
+            arg = (2 * np.pi * k * t_n) / T_p
+            X[:, col] = np.cos(arg)
+            X[:, col + 1] = np.sin(arg)
+            col += 2
     return X
 
 
@@ -133,7 +138,7 @@ def ajustar_sarima(w, p_max, q_max, P_max, Q_max, s, K_a):
     return best_result
 
 
-def ajustar_farima(y, d, K_p_max, p_max, q_max, P_max, Q_max, K_a, lam, s):
+def ajustar_farima(y, d, K_p_max, p_max, q_max, P_max, Q_max, K_a, lam, s, P_fourier=2):
     t_n = np.arange(len(y))
     
     y_estacionaria = diferenciar_serie(y, d, 0, 0)
@@ -142,41 +147,52 @@ def ajustar_farima(y, d, K_p_max, p_max, q_max, P_max, Q_max, K_a, lam, s):
     if len(I_fk) > 0:
         I_fk = I_fk.copy()
         I_fk[0] = 0
-    idx_max = int(np.argmax(I_fk)) if len(I_fk) > 0 else 0
-    f_max = f_k[idx_max] if len(f_k) > 0 else 0.0
-    
-    T_p_raw = (s / f_max) if f_max > 0 else float(len(y))
-    T_p = np.round(T_p_raw) 
-    
+        
+    T_p_list = []
+    if len(I_fk) > 0:
+        indices_top = np.argsort(I_fk)[-P_fourier:][::-1]
+        for idx in indices_top:
+            f_val = f_k[idx]
+            if f_val > 0:
+                T_p_list.append(np.round(s / f_val))
+                
+    if not T_p_list:
+        T_p_list = [float(len(y))]
+        
     best_aic = np.inf
     best_Kp = 1
     best_gamma = None
     best_residuals = None
+    best_d_res = 0
 
     for K_p in range(1, K_p_max + 1):
-        X = construir_matriz_fourier(t_n, T_p, K_p)
+        X = construir_matriz_fourier(t_n, T_p_list, K_p)
         gamma_hat = estimar_gamma_farima(X, y, lam).flatten()
         pred = X @ gamma_hat
         residuals = y - pred
         
-        w_residuals_aic = diferenciar_serie(residuals, d, 0, 0)
+        # Encontramos la integración necesaria solo para estos residuos
+        d_res, _ = buscar_ordenes_integracion(residuals, s=0, alpha=0.05, max_lag=30, d_max=3, D_max=0)
+        w_residuals_aic = diferenciar_serie(residuals, d_res, 0, 0)
         
-        aic = calcular_aic(np.sum(w_residuals_aic ** 2), len(w_residuals_aic), 2 * K_p)
+        aic = calcular_aic(np.sum(w_residuals_aic ** 2), len(w_residuals_aic), 2 * K_p * len(T_p_list))
         
         if aic < best_aic:
             best_aic = aic
             best_Kp = K_p
             best_gamma = gamma_hat
             best_residuals = residuals
+            best_d_res = d_res
 
-    w_residuals = diferenciar_serie(best_residuals, d, 0, 0)
+    w_residuals = diferenciar_serie(best_residuals, best_d_res, 0, 0)
     arima_model = ajustar_sarima(w_residuals, p_max, q_max, 0, 0, 0, K_a)
 
     return {
-        'T_p': float(T_p),
+        'T_p': [float(tp) for tp in T_p_list],
         'K_p': best_Kp,
         'gamma': best_gamma.tolist() if best_gamma is not None else [],
-        'arima_model': arima_model
+        'arima_model': arima_model,
+        'd_residual': best_d_res
     }
 
 
@@ -189,6 +205,7 @@ if __name__ == '__main__':
     K_a = 72
     lam = 0.01
     K_p_max = 5
+    P_fourier = 2
 
     adf_results = pd.read_csv('adf.csv')
     d = int(adf_results['d'].iloc[0])
@@ -205,7 +222,7 @@ if __name__ == '__main__':
 
     w_train = diferenciar_serie(y_train, d, D, s)
     modelo_sarima = ajustar_sarima(w_train, p_max, q_max, P_max, Q_max, s, K_a)
-    modelo_farima = ajustar_farima(y_train, d, K_p_max, p_max, q_max, P_max, Q_max, K_a, lam, s)
+    modelo_farima = ajustar_farima(y_train, d, K_p_max, p_max, q_max, P_max, Q_max, K_a, lam, s, P_fourier)
 
     resultados = [
         {
@@ -215,7 +232,7 @@ if __name__ == '__main__':
             'L_A': str(modelo_sarima['L_A']) if modelo_sarima else '',
             'L_M': str(modelo_sarima['L_M']) if modelo_sarima else '',
             'Gamma_hat_Phase1': str(modelo_sarima['Gamma_hat']) if modelo_sarima else '',
-            'T_p': np.nan,
+            'T_p': '',
             'K_p': np.nan,
             'gamma': '',
             'aic': modelo_sarima['aic'] if modelo_sarima else np.nan,
@@ -226,7 +243,9 @@ if __name__ == '__main__':
             'P_max': P_max,
             'Q_max': Q_max,
             'K_p_max': K_p_max,
-            'lam': lam
+            'lam': lam,
+            'P_fourier': np.nan,
+            'd_residual': np.nan
         },
         {
             'modelo': 'FARIMA',
@@ -235,7 +254,7 @@ if __name__ == '__main__':
             'L_A': str(modelo_farima['arima_model']['L_A']) if modelo_farima and modelo_farima['arima_model'] else '',
             'L_M': str(modelo_farima['arima_model']['L_M']) if modelo_farima and modelo_farima['arima_model'] else '',
             'Gamma_hat_Phase1': str(modelo_farima['arima_model']['Gamma_hat']) if modelo_farima and modelo_farima['arima_model'] else '',
-            'T_p': modelo_farima['T_p'] if modelo_farima else np.nan,
+            'T_p': str(modelo_farima['T_p']) if modelo_farima else '',
             'K_p': modelo_farima['K_p'] if modelo_farima else np.nan,
             'gamma': str(modelo_farima['gamma']) if modelo_farima else '',
             'aic': modelo_farima['arima_model']['aic'] if modelo_farima and modelo_farima['arima_model'] else np.nan,
@@ -246,7 +265,9 @@ if __name__ == '__main__':
             'P_max': P_max,
             'Q_max': Q_max,
             'K_p_max': K_p_max,
-            'lam': lam
+            'lam': lam,
+            'P_fourier': P_fourier,
+            'd_residual': modelo_farima['d_residual'] if modelo_farima else np.nan
         }
     ]
 
