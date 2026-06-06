@@ -110,8 +110,8 @@ if __name__ == '__main__':
     LA_farima = [int(x) for x in parse_list(row_farima['L_A'])]
     LM_farima = [int(x) for x in parse_list(row_farima['L_M'])]
     Gamma_farima = np.array(parse_list(row_farima['Gamma_hat_Phase1']))
-    
-    # Extraer d_residual específico para F-ARIMA si existe
+
+    # Extraer d_residual especifico para F-ARIMA si existe
     d_farima = int(float(row_farima['d_residual'])) if 'd_residual' in df_train.columns and not pd.isna(row_farima['d_residual']) else d
 
     w_true_sarima = diferenciar_serie_pad(y_full, d, D, s)
@@ -132,7 +132,7 @@ if __name__ == '__main__':
     F_full = np.dot(X_fourier, gamma_fourier)
     residual_fourier = y_full - F_full
 
-    # Aquí usamos el d_farima extraído
+    # Aqui usamos el d_farima extraido
     w_true_farima = diferenciar_serie_pad(residual_fourier, d_farima, 0, 0)
     eps_true_farima = calcular_residuos_empiricos(w_true_farima, K_a, Gamma_farima)
 
@@ -142,7 +142,7 @@ if __name__ == '__main__':
         if np.isnan(eta_hat_t):
             y_pred_farima.append(np.nan)
         else:
-            # Aquí también usamos el d_farima para la recuperación
+            # Aqui tambien usamos el d_farima para la recuperacion
             residual_hat_t = recuperar_sarima(eta_hat_t, residual_fourier, t, d_farima, 0, 0)
             y_pred_farima.append(F_full[t] + residual_hat_t)
     y_pred_farima = np.array(y_pred_farima)
@@ -164,14 +164,14 @@ if __name__ == '__main__':
         'n_valid_eval': [int(mask_s.sum()), int(mask_f.sum())]
     }
     pd.DataFrame(metrics).to_csv('test.csv', index=False)
-    print('Evaluación finalizada. Métricas guardadas en test.csv')
+    print('Evaluacion finalizada. Metricas guardadas en test.csv')
 
     plt.figure(figsize=(14, 6))
     plt.plot(t_test, y_true_test, label='Valor Real', color='black', linewidth=2)
-    plt.plot(t_test, y_pred_sarima, label='Predicción SARIMA', linestyle='--')
-    plt.plot(t_test, y_pred_farima, label='Predicción F-ARIMA', linestyle='-.')
-    plt.title('Pronóstico One-Step-Ahead: Valor Estimado vs Valor Real')
-    plt.xlabel('Índice Temporal (Test)')
+    plt.plot(t_test, y_pred_sarima, label='Prediccion SARIMA', linestyle='--')
+    plt.plot(t_test, y_pred_farima, label='Prediccion F-ARIMA', linestyle='-.')
+    plt.title('Pronostico One-Step-Ahead: Valor Estimado vs Valor Real')
+    plt.xlabel('Indice Temporal (Test)')
     plt.ylabel('Valor')
     plt.legend()
     plt.grid(True)
@@ -201,4 +201,4 @@ if __name__ == '__main__':
 
     plt.savefig('acf_residuos.png')
     plt.close()
-    print('Gráficas guardadas: predicciones.png, acf_residuos.png')
+    print('Graficas guardadas: predicciones.png, acf_residuos.png')

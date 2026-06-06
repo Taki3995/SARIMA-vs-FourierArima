@@ -65,6 +65,40 @@ def construir_conjuntos_retardo(p, q, P, Q, s):
     return sorted(L_A), sorted(L_M)
 
 
+def orden_ar_optimo_fpe(w, max_order=None):
+    """Encuentra el orden AR optimo via FPE sin techo arbitrario."""
+    w = np.asarray(w, dtype=float)
+    N = len(w)
+    if max_order is None:
+        max_order = int(np.ceil(np.log(N) * 10))
+
+    best_fpe = np.inf
+    best_p = 1
+
+    for p in range(1, min(max_order, N // 4) + 1):
+        Y = w[p:]
+        Z = np.zeros((len(Y), p))
+        for i in range(p):
+            Z[:, i] = w[p - 1 - i : N - 1 - i]
+
+        try:
+            gamma, _, _, _ = np.linalg.lstsq(Z, Y, rcond=None)
+            e = Y - Z @ gamma
+            sse = np.sum(e ** 2)
+            n_eff = len(Y)
+            fpe = (sse / n_eff) * ((n_eff + p) / (n_eff - p))
+        except np.linalg.LinAlgError:
+            continue
+
+        if fpe < best_fpe:
+            best_fpe = fpe
+            best_p = p
+        elif fpe > best_fpe * 1.01:
+            break
+
+    return best_p
+
+
 def ajustar_sarima(w, p_max, q_max, P_max, Q_max, s, K_a):
     Gamma_hat, epsilon_hat = sarima_fase_1(w, K_a)
     if Gamma_hat is None:
@@ -140,14 +174,14 @@ def ajustar_sarima(w, p_max, q_max, P_max, Q_max, s, K_a):
 
 def ajustar_farima(y, d, K_p_max, p_max, q_max, P_max, Q_max, K_a, lam, s, P_fourier=2):
     t_n = np.arange(len(y))
-    
+
     y_estacionaria = diferenciar_serie(y, d, 0, 0)
     f_k, I_fk = periodograma(y_estacionaria, f_s=s)
-    
+
     if len(I_fk) > 0:
         I_fk = I_fk.copy()
         I_fk[0] = 0
-        
+
     T_p_list = []
     if len(I_fk) > 0:
         indices_top = np.argsort(I_fk)[-P_fourier:][::-1]
@@ -155,10 +189,10 @@ def ajustar_farima(y, d, K_p_max, p_max, q_max, P_max, Q_max, K_a, lam, s, P_fou
             f_val = f_k[idx]
             if f_val > 0:
                 T_p_list.append(np.round(s / f_val))
-                
+
     if not T_p_list:
         T_p_list = [float(len(y))]
-        
+
     best_aic = np.inf
     best_Kp = 1
     best_gamma = None
@@ -170,13 +204,12 @@ def ajustar_farima(y, d, K_p_max, p_max, q_max, P_max, Q_max, K_a, lam, s, P_fou
         gamma_hat = estimar_gamma_farima(X, y, lam).flatten()
         pred = X @ gamma_hat
         residuals = y - pred
-        
-        # Encontramos la integración necesaria solo para estos residuos
+
         d_res, _ = buscar_ordenes_integracion(residuals, s=0, alpha=0.05, max_lag=30, d_max=3, D_max=0)
         w_residuals_aic = diferenciar_serie(residuals, d_res, 0, 0)
-        
+
         aic = calcular_aic(np.sum(w_residuals_aic ** 2), len(w_residuals_aic), 2 * K_p * len(T_p_list))
-        
+
         if aic < best_aic:
             best_aic = aic
             best_Kp = K_p
@@ -198,11 +231,6 @@ def ajustar_farima(y, d, K_p_max, p_max, q_max, P_max, Q_max, K_a, lam, s, P_fou
 
 if __name__ == '__main__':
     train_size = 0.8
-    p_max = 2
-    q_max = 2
-    P_max = 1
-    Q_max = 1
-    K_a = 72
     lam = 0.01
     K_p_max = 5
     P_fourier = 2
@@ -220,7 +248,20 @@ if __name__ == '__main__':
     n_train = int(len(y_full) * train_size)
     y_train = y_full[:n_train]
 
+    # K_a automatico basado en la longitud del entrenamiento
+    K_a = int(np.ceil(np.log(len(y_train)) * 10))
+
     w_train = diferenciar_serie(y_train, d, D, s)
+
+    # Orden maximo adaptativo via FPE
+    p_optimo = orden_ar_optimo_fpe(w_train)
+    p_max = min(p_optimo + 1, len(w_train) // 10)
+    q_max = p_max
+    P_max = 1
+    Q_max = 1
+
+    print(f'K_a={K_a}, p_max={p_max}, q_max={q_max}, P_max={P_max}, Q_max={Q_max}')
+
     modelo_sarima = ajustar_sarima(w_train, p_max, q_max, P_max, Q_max, s, K_a)
     modelo_farima = ajustar_farima(y_train, d, K_p_max, p_max, q_max, P_max, Q_max, K_a, lam, s, P_fourier)
 
