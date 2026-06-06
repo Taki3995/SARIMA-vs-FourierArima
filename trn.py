@@ -196,63 +196,62 @@ def grid_search_sarima(w, p_max, q_max, P_max, Q_max, s, K_a, lam):
 # 3. ALGORITMOS F-ARIMA
 # =============================================================================
 
-def entrenar_farima(y, d, K_p_max, p_max, q_max, K_a, lam, s):
-    """Entrena Fourier (Periodograma + OLS-Penalizado) y modela el residuo con ARIMA(p,d,q)"""
-
-    t_n = np.arange(len(y))
-
-    # Detrending lineal para evitar fuga espectral
-    slope, intercept = np.polyfit(t_n, y, 1)
-    y_detrended = y - (slope * t_n + intercept)
-
-    f_k, I_fk = periodograma(y_detrended, f_s=1.0)
-
-    # Excluir frecuencia 0 (componente DC) para buscar la frecuencia fundamental
-    I_fk[0]  = 0
-    idx_max  = np.argmax(I_fk)
-    f_max    = f_k[idx_max]
-
-    # T_p en número de muestras: T_p = 1 / f_max  (con f_s=1)
-    T_p = (1.0 / f_max) if f_max > 0 else float(len(y))
-
-    # Centrado de la serie
-    y_mean    = np.mean(y)
-    y_centered = y - y_mean
-
-    best_aic_fourier = np.inf
-    best_Kp          = 1
-    best_gamma       = None
-    best_residuals   = None
-
-    for K_p in range(1, K_p_max + 1):
-        X        = construir_matriz_fourier(t_n, T_p, K_p)
-        gamma_hat = estimar_gamma_farima(X, y_centered, lam).flatten()
-        pred     = np.dot(X, gamma_hat)
-        res      = y_centered - pred
-
-        # Residuos con la media restituida para preservar la escala de y
-        res_con_media = res + y_mean
-
-        sse        = np.sum(res ** 2)
-        n_eval     = len(y)
-        num_params = 2 * K_p
-        aic        = calcular_aic(sse, n_eval, num_params)
-
-        if aic < best_aic_fourier:
-            best_aic_fourier = aic
-            best_Kp          = K_p
-            best_gamma       = gamma_hat
-            best_residuals   = res_con_media
-
-    # Componente ARIMA(p,d,q) sobre los residuos.
-    w_residuals = diferenciar_serie(best_residuals, d, 0, 0)
-    arima_res   = grid_search_sarima(w_residuals, p_max, q_max, 0, 0, 1, K_a, lam)
-
+def entrenar_farima(y_train, d, p, q, T_p, K_p, lambda_reg=0.1, K_a=20):
+    N = len(y_train)
+    t_n = np.arange(N)
+    
+    # PASO 1: Aislamiento de la Tendencia (Detrending)
+    # Evita que el OLS fuerce a los senos/cosenos a replicar una línea recta
+    coefs_tendencia = np.polyfit(t_n, y_train, 1)
+    tendencia_lineal = np.polyval(coefs_tendencia, t_n)
+    y_sin_tendencia = y_train - tendencia_lineal
+    
+    # PASO 2: Estimación OLS-Penalizado de la Serie de Fourier
+    X_fourier = construir_matriz_fourier(t_n, T_p, K_p)
+    gamma_hat = estimar_gamma_farima(X_fourier, y_sin_tendencia, lambda_reg)
+    F_t = X_fourier @ gamma_hat
+    
+    # PASO 3: Cálculo del residuo estocástico
+    # eta_t recupera la tendencia lineal original + el ruido para modelarlo con ARIMA
+    eta_t = y_train - F_t
+    
+    # PASO 4: Preparación del modelo ARIMA sobre eta_t
+    w_t = np.array(eta_t.copy())
+    for _ in range(d):
+        w_t = np.diff(w_t, n=1)
+        
+    # PASO 5: Estimación Two-Phase OLS (ARIMA)
+    # Fase I
+    epsilon_hat, gamma_ar = calcular_residuos_empiricos(w_t, K_a)
+    
+    # Fase II: Construcción de matriz de diseño aumentada X_t = [x_A,t ; x_M,t]
+    # (Se vectoriza para alinear w_t y los retardos p, q)
+    start_idx = max(p, q, K_a)
+    T_w = len(w_t)
+    
+    X_mat = []
+    Y_target = []
+    
+    for t in range(start_idx, T_w):
+        x_A = w_t[t-p : t][::-1]                # Retardos AR
+        x_M = epsilon_hat[t-q : t][::-1]        # Retardos MA
+        X_mat.append(np.concatenate([x_A, x_M]))
+        Y_target.append(w_t[t])
+        
+    X_mat = np.array(X_mat)
+    Y_target = np.array(Y_target)
+    
+    # Estimación final de coeficientes expandidos (eta)
+    eta_coefs = np.linalg.pinv(X_mat.T @ X_mat) @ X_mat.T @ Y_target
+    
     return {
-        'T_p'        : float(T_p),
-        'K_p'        : best_Kp,
-        'gamma'      : best_gamma.tolist() if best_gamma is not None else [],
-        'arima_model': arima_res
+        'F_t': F_t,
+        'gamma_fourier': gamma_hat,
+        'arima_eta_coefs': eta_coefs,
+        'eta_t': eta_t,
+        'd': d,
+        'p': p,
+        'q': q
     }
 
 # =============================================================================
