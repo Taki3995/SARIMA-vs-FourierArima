@@ -61,29 +61,28 @@ def auto_fase_I_innovaciones(w):
 def fase_II_busqueda_dinamica(w, eps, s, K_a):
     N = len(w)
     capa_actual = 0
-    limite_paciencia = 4 # Hasta orden máximo de 4 por componente (asegura término en tiempo finito)
+    limite_paciencia = 4
+    modelos_evaluados = []
     
-    modelos_evaluados = [] # Guardará tuplas: (aic, modelo, eta, residuos_e)
-    
-    while capa_actual <= limite_paciencia:
+    # FORZAR búsqueda mínima si la lista está vacía
+    while capa_actual <= limite_paciencia and len(modelos_evaluados) == 0:
         print(f"   -> Explorando Capa de Complejidad {capa_actual}...")
         
-        # Generar combinaciones pertenecientes EXACTAMENTE a esta capa
-        # Una combinación es de esta capa si su orden máximo es exactamente 'capa_actual'
         for p in range(capa_actual + 1):
             for q in range(capa_actual + 1):
                 for P in range(capa_actual + 1):
                     for Q in range(capa_actual + 1):
                         
-                        if max(p, q, P, Q) != capa_actual:
-                            continue # Ya se evaluó en una capa anterior
-                            
-                        if p == 0 and q == 0 and P == 0 and Q == 0:
-                            continue
-                            
+                        # Ajuste: En capa 0, permitimos que se evalúen modelos básicos 
+                        # siempre que al menos uno de los parámetros sea > 0
+                        if capa_actual == 0:
+                            if p == 0 and q == 0 and P == 0 and Q == 0: continue
+                        else:
+                            if max(p, q, P, Q) != capa_actual: continue
+                        
+                        # ... (el resto del código se mantiene igual hasta el final del bucle)
                         max_lag = max(p, P * s, q, Q * s, K_a)
-                        if max_lag >= N - 10: # Failsafe de datos insuficientes
-                            continue 
+                        if max_lag >= N - 10: continue 
                             
                         Y_target = w[max_lag:]
                         X_expandida = []
@@ -98,16 +97,18 @@ def fase_II_busqueda_dinamica(w, eps, s, K_a):
                             
                         X_expandida = np.array(X_expandida)
                         
-                        # Manejo de matrices singulares o inestables en OLS
                         try:
                             eta_hat = ols_estimate(X_expandida, Y_target, lam=LAMBDA)
                             e_t = Y_target - (X_expandida @ eta_hat)
                             aic = calcular_aic(e_t, len(eta_hat), len(Y_target))
                             modelos_evaluados.append((aic, (p, q, P, Q), eta_hat, e_t))
                         except Exception:
-                            pass # Ignorar modelo matemáticamente inestable
+                            pass
         
-        # 1. Ordenar todos los modelos evaluados hasta ahora por AIC
+        if len(modelos_evaluados) == 0:
+            capa_actual += 1 # Si no encontramos nada en la capa 0, subimos a la 1
+            continue
+
         modelos_evaluados.sort(key=lambda x: x[0])
         
         # 2. El Filtro: Verificar si el MEJOR modelo (menor AIC) es Ruido Blanco
