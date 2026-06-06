@@ -87,66 +87,39 @@ def diferenciar_estacional(serie, s):
 # 3. LÓGICA PRINCIPAL DE INTEGRACIÓN
 # =============================================================================
 
-def buscar_ordenes_integracion(serie, s, alpha, max_lag):
-    """
-    Busca el orden ordinario (d) y el orden estacional (D) mediante ADF.
-    Condición de raíz unitaria: t_stat >= cv  →  se diferencia.
-
-    CORRECCIÓN: el orden correcto es primero determinar d (diferenciación
-    ordinaria) sobre la serie original, y luego determinar D (diferenciación
-    estacional) sobre la serie ya estacionaria en nivel. El código anterior
-    aplicaba D antes que d, lo que producía resultados como d=0, D=1 cuando
-    la serie requería diferenciación ordinaria.
-    """
-    serie_actual = np.array(serie.copy())
-
+def buscar_ordenes_integracion(serie, s, alpha=0.05, max_lag=30):
+    historial = []
     d = 0
     D = 0
-
-    # Estadísticos intermedios para el CSV de resultados
-    historial = []
-
-    # ------------------------------------------------------------------
-    # PASO 1: Determinar d (diferenciación ordinaria)
-    # ------------------------------------------------------------------
-    t_stat, cv = ejecutar_test_adf(serie_actual, max_lag, alpha)
+    y_ord = np.array(serie)
+    
+    # PASO 1: Determinar orden ordinario 'd' sobre la serie original
+    t_stat_d, cv_d = ejecutar_test_adf(y_ord, max_lag, alpha)
+    if t_stat_d > cv_d:
+        d = 1
+        # Si la tendencia es altamente cuadrática, aquí se podría evaluar d=2 con np.diff()
+        
     historial.append({
         'etapa': 'ordinaria', 'orden': d,
-        't_stat': round(t_stat, 4), 'valor_critico': cv,
-        'es_estacionaria': t_stat < cv
+        't_stat': round(t_stat_d, 4), 'valor_critico': cv_d,
+        'es_estacionaria': bool(t_stat_d <= cv_d)
     })
 
-    while t_stat >= cv and d < 3:
-        serie_actual = diferenciar_ordinaria(serie_actual)
-        d += 1
-        t_stat, cv = ejecutar_test_adf(serie_actual, max_lag, alpha)
-        historial.append({
-            'etapa': 'ordinaria', 'orden': d,
-            't_stat': round(t_stat, 4), 'valor_critico': cv,
-            'es_estacionaria': t_stat < cv
-        })
-
-    # ------------------------------------------------------------------
-    # PASO 2: Determinar D (diferenciación estacional) sobre la serie
-    #         que ya es estacionaria en nivel
-    # ------------------------------------------------------------------
-    t_stat, cv = ejecutar_test_adf(serie_actual, max_lag, alpha)
+    # PASO 2: Determinar orden estacional 'D' aislando los ciclos
+    # Evaluamos la estacionalidad extrayendo puntos cada 's' muestras (aislamiento de fase)
+    # Esto evita el falso positivo del test estándar tras una diferenciación ordinaria.
+    y_seasonal = y_ord[::s]
+    t_stat_D, cv_D = ejecutar_test_adf(y_seasonal, max_lag=min(max_lag, len(y_seasonal)//2 - 1), alpha=alpha)
+    
+    if t_stat_D > cv_D:
+        D = 1
+        
     historial.append({
         'etapa': 'estacional', 'orden': D,
-        't_stat': round(t_stat, 4), 'valor_critico': cv,
-        'es_estacionaria': t_stat < cv
+        't_stat': round(t_stat_D, 4), 'valor_critico': cv_D,
+        'es_estacionaria': bool(t_stat_D <= cv_D)
     })
-
-    while t_stat >= cv and D < 3:
-        serie_actual = diferenciar_estacional(serie_actual, s)
-        D += 1
-        t_stat, cv = ejecutar_test_adf(serie_actual, max_lag, alpha)
-        historial.append({
-            'etapa': 'estacional', 'orden': D,
-            't_stat': round(t_stat, 4), 'valor_critico': cv,
-            'es_estacionaria': t_stat < cv
-        })
-
+    
     return d, D, historial
 
 # =============================================================================
