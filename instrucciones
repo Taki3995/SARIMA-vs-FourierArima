@@ -1,0 +1,204 @@
+SARIMA vs Fourier-ARIMA (F-ARIMA)
+One-step-forecasting
+
+1. Objetivos del Taller
+
+Objetivo General:
+
+Implementar y evaluar dos método de pronóstico (one-step-ahead)
+de series de tiempo no-estacionarias usando F-ARIMA y SARIMA
+
+Objetivos Específicos:
+1 Identificar las componentes periódicas usando el periodograma.
+2 Estimar los coficientes de la serie de Fourier usando el método
+
+OLS-Penalizados.
+3 Determinar el orden de integración d, D mediante el test ADF
+
+para ARIMA y SARIMA.
+4 Estimar de coeficientes de ARIMA y SARIMA usando el método
+Two-Phase-OLS
+
+5 Evaluar el rendimiento de F-ARIMA y SARIMA usando la mNSE
+y el MAPE.
+
+6 Evalaur la significancia estadística de los residuos mediante el test
+de Jarque-Bera y función de autocorrelación.
+
+Fourier-ARIMA (F-ARIMA)
+
+Sea y(tn) una serie de tiempo no estacionaria. Definimos el modelo
+Fourier-ARIMA como:
+
+F-ARIMA:
+
+y(tn) =∑F (tn) + η(tn)
+P ∑Kp [ ( ) ( )]
+
+2πktn 2πktn
+F (tn) = αp,k cos + βp,k sin
+
+Tp T
+p=1 p
+
+k=1
+
+Donde:
+
+P denota el número de periódos medidos en número de muestras.
+
+Kp denota el número de armónicos de cada periódo.
+
+Tp denota el periódo fundamental.
+
+La componente residual ηt sigue un proceso ARIMA(p, d, q).
+
+F-ARIMA: Estimación de Coeficientes
+
+Representación lineal expandida de la serie de Fourier:
+
+F-ARIMA:
+
+Y = XΓ+ η
+
+donde la matriz de diseño y coeficientes son ( ))cos( construidos como:
+
+2πktn
+T
+
+X = p  .
+sin 2πkt
+
+[ n
+Tp]
+
+α
+Γ = p,k .
+
+βp,k
+
+Los coeficientes expandidos Γ son estimados vía método
+OLS-Penalizado por la sigui(ente expresi)ón:−
+
+XT 1
+Γ̂ = X+ λI XTY
+
+Modelo ARIMA
+
+La representación del modelo ARIMA(p,d,q) usando el operador de
+rezago L es definida como:
+
+ARIMA ( ∑ ) (
+p ∑ )
+
+q
+
+1− aiL
+i (1− L)dηt = 1 + biL
+
+i et
+i=1 i=1
+
+Donde:
+
+(1− L)d: Filtro de diferenciación para eliminar la tendencia.
+
+Li: Operador de rezago tal que Lixt = xt−i.
+
+et: Ruido blanco (error aleatorio).
+
+Estimación:
+Los Coeficientes son estimados usando OLS de doble fase.
+
+
+
+SARIMA(p,d,q)(P,D,Q) via Two-Phase OLS+AIC
+
+Sea {yt}Tt=1 una serie de tiempo observada. El modelo SARIMA se
+define aplicando diferenciación estacional y diferenciación ordinaria
+sobre yt. Esto es:
+
+SARIMA:
+
+wt = ∇d∇D
+s yt,
+
+El proceso diferenciado wt es modelado como:
+
+ϕp(L)ΦP (L
+s)wt = θq(L)ΘQ(L
+
+s)εt,
+
+donde {εt} es un proceso de innovación (residuos) de media cero y
+varianza σ2
+
+ε .
+
+SARIMA: Estimación de Coeficientes
+
+Para estimar los coeficientes utilizaremos el metodod OLS de doble
+phase.
+
+SARIMA:
+Phase I: Estimación de Residuos vía un AR(Ka).
+
+∑Ka
+
+wt = γjwt−j + ut, Ka ≫ (p+ Ps+ 1)
+j=1
+
+Los coeficientes Γ̂ son obtenidos vía el metodo OLS, mientras que los
+residuos asociados se definen como innovaciones calculadas por:
+
+ε̂t = wt − z⊤t Γ̂, t = Ka + 1, . . . , T.
+
+SARIMA: Estimación de Coeficientes
+
+Phase II: Estimación Lineal Expandida
+
+SARIMA:
+La matriz de diseño aumentada es [constr]uida como:
+
+x
+Xt =
+
+A,t .
+xM,t
+
+La representación lineal expandida es obtenida como:
+
+wt = X⊤
+t η + et,
+
+donde η contiene coeficientes expandidos y son estimados vía el método
+OLS.
+
+
+
+4. Resultados: Visualización y Recuperación
+
+SARIMA:
+Visualización de SARIMA en el Dominio Original:
+
+Méetodo de recuperación via Teorema del Binomio Newton:
+
+ŶT+h = Recuperar(ŷT+h,∆
+d−1YT , . . . , YT )
+
+Graficar las curvas comparativas: Valor Estimado versus Valor
+Real.
+
+Reportar mNSE y MAPE.
+
+
+7. Entregables:
+
+1 Python, numpy, panda, matplotlib. (prohibido cualquier otra libreria)
+2 Resultado parciales de cada etapa: xxx.csv
+3 xxx: nombre del archivo de salida.
+4 Archivos configuración: (adf ,train,test).csv (debe tener los mejores parametros encontrados, metricas, etc.) 
+5 Fuentes: adf.py, trn.py, tst.py, utility.py.
+
+8. otros
+ningún valor o variable, maximo, minimo, techo etc debe estar hardcodeado, todo debe calcularse con el codigo. 
