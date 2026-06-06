@@ -135,16 +135,19 @@ def ajustar_sarima(w, p_max, q_max, P_max, Q_max, s, K_a):
 
 def ajustar_farima(y, d, K_p_max, p_max, q_max, P_max, Q_max, K_a, lam, s):
     t_n = np.arange(len(y))
-    y_estacionaria = diferenciar_serie(y, d, 0, 0)
     
+    y_estacionaria = diferenciar_serie(y, d, 0, 0)
     f_k, I_fk = periodograma(y_estacionaria, f_s=s)
+    
     if len(I_fk) > 0:
         I_fk = I_fk.copy()
         I_fk[0] = 0
     idx_max = int(np.argmax(I_fk)) if len(I_fk) > 0 else 0
     f_max = f_k[idx_max] if len(f_k) > 0 else 0.0
-    T_p = (s / f_max) if f_max > 0 else float(len(y))
-
+    
+    T_p_raw = (s / f_max) if f_max > 0 else float(len(y))
+    T_p = np.round(T_p_raw) 
+    
     best_aic = np.inf
     best_Kp = 1
     best_gamma = None
@@ -155,6 +158,7 @@ def ajustar_farima(y, d, K_p_max, p_max, q_max, P_max, Q_max, K_a, lam, s):
         gamma_hat = estimar_gamma_farima(X, y, lam).flatten()
         pred = X @ gamma_hat
         residuals = y - pred
+        
         w_residuals_aic = diferenciar_serie(residuals, d, 0, 0)
         
         aic = calcular_aic(np.sum(w_residuals_aic ** 2), len(w_residuals_aic), 2 * K_p)
