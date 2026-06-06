@@ -1,253 +1,222 @@
 import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-from utility import recuperar_sarima, calc_mnse, calc_mape, test_jarque_bera, calc_acf
+import math
 
 # =============================================================================
-# 1. FUNCIONES DE PARSEO (Sin librerías externas)
+# 1. ESTIMADORES MATRICIALES (SVD y OLS)
 # =============================================================================
 
-def parse_list(s_val):
-    """Parsea un string de array a una lista de floats sin usar ast ni json."""
-    if pd.isna(s_val): return []
-    s_val = str(s_val).strip()
-    if s_val in ('', '[]', 'None', 'nan'): return []
-    s_val = s_val.replace('[', '').replace(']', '').replace('\n', '')
-    return [float(x.strip()) for x in s_val.split(',') if x.strip() != '']
-
-# =============================================================================
-# 2. FUNCIONES DE PROCESAMIENTO TEMPORAL
-# =============================================================================
-
-def diferenciar_serie_pad(y, d, D, s):
+def pinv_svd(A):
     """
-    Diferencia la serie manteniendo la longitud original (rellenando con NaN).
-    Permite alinear exactamente el índice temporal t entre y_t y w_t.
+    Calcula la matriz Pseudo-Inversa usando SVD para evitar singularidades.
+    Fórmula: A^{-1} = V \times S^{-1} \times U^T
     """
-    w = np.array(y, dtype=float)
+    U, S, Vh = np.linalg.svd(A, full_matrices=False)
     
-    # Diferenciación estacional
-    for _ in range(int(D)):
-        w_new = np.full_like(w, np.nan)
-        w_new[s:] = w[s:] - w[:-s]
-        w = w_new
-        
-    # Diferenciación ordinaria
-    for _ in range(int(d)):
-        w_new = np.full_like(w, np.nan)
-        w_new[1:] = w[1:] - w[:-1]
-        w = w_new
-        
-    return w
+    tol = np.max(S) * 1e-15
+    S_inv = np.array([1/s if s > tol else 0 for s in S])
+    
+    invA = Vh.T @ np.diag(S_inv) @ U.T
+    return invA
 
-def calcular_residuos_empiricos(w, K_a, Gamma):
+def ols_estimate(X, Y, lam=0.0):
     """
-    Calcula los residuos empíricos epsilon_hat para toda la serie.
-    Fórmula: epsilon_t = w_t - sum_{j=1}^{K_a} Gamma_j * w_{t-j}
+    Estimación OLS-Penalizado (Ridge) o Mínimos Cuadrados Ordinarios.
+    Fórmula: \hat{\Gamma} = (X^T X + \lambda I)^{-1} X^T Y
     """
-    epsilon = np.full_like(w, np.nan)
-    if len(Gamma) == 0:
-        return epsilon
-        
-    for t in range(K_a, len(w)):
-        # Verificar que no haya NaNs en la ventana requerida
-        if not np.isnan(w[t - K_a : t + 1]).any():
-            z_t = w[t - K_a : t][::-1] # [w_{t-1}, w_{t-2}, ..., w_{t-K_a}]
-            epsilon[t] = w[t] - np.dot(z_t, Gamma)
-            
-    return epsilon
-
-def construir_matriz_fourier(t_n, T_p, K_p):
-    """Construye la matriz de diseño de Fourier para toda la serie temporal."""
-    n_samples = len(t_n)
-    X = np.zeros((n_samples, int(2 * K_p)))
-    for k in range(1, int(K_p) + 1):
-        arg = (2 * np.pi * k * t_n) / T_p
-        X[:, 2*(k-1)] = np.cos(arg)
-        X[:, 2*(k-1) + 1] = np.sin(arg)
-    return X
+    I = np.eye(X.shape[1])
+    A = (X.T @ X) + (lam * I)
+    invA = pinv_svd(A)
+    Gamma_hat = invA @ X.T @ Y
+    return Gamma_hat
 
 # =============================================================================
-# 3. LÓGICA DE PREDICCIÓN ONE-STEP-AHEAD
+# 2. DIAGNÓSTICO ESTADÍSTICO (ADF, Jarque-Bera, ACF, Ruido Blanco)
 # =============================================================================
 
-def predecir_arima_step(w_true, epsilon_true, t, L_A, L_M, eta):
+def custom_adf(y, alpha=0.05):
     """
-    Calcula la predicción w_hat_t usando los retardos pasados verdaderos.
+    Implementación manual del Test Dickey-Fuller Aumentado con rezago 1.
+    Retorna: t_stat, crit_val, is_stationary
     """
-    x_A_t = []
-    for l in L_A:
-        idx = t - int(l)
-        x_A_t.append(w_true[idx] if idx >= 0 else np.nan)
-        
-    x_M_t = []
-    for l in L_M:
-        idx = t - int(l)
-        x_M_t.append(epsilon_true[idx] if idx >= 0 else np.nan)
-        
-    X_t = np.array(x_A_t + x_M_t)
+    dy = np.diff(y)
+    y_lag = y[:-1]
     
-    if np.isnan(X_t).any():
-        return np.nan
-        
-    return np.dot(X_t, eta)
+    dy_t = dy[1:]
+    y_lag_1 = y_lag[1:]
+    dy_lag = dy[:-1]
+    
+    N = len(dy_t)
+    X = np.column_stack((np.ones(N), y_lag_1, dy_lag))
+    
+    Gamma = ols_estimate(X, dy_t)
+    
+    e = dy_t - (X @ Gamma)
+    grados_libertad = N - X.shape[1]
+    
+    # Manejo de varianza cero para evitar divisiones inválidas
+    sigma2 = np.sum(e**2) / grados_libertad
+    if sigma2 == 0:
+        return 0, -2.86, True
 
-# =============================================================================
-# 4. EJECUCIÓN PRINCIPAL
-# =============================================================================
+    var_Gamma = sigma2 * pinv_svd(X.T @ X)
+    se_gamma = np.sqrt(np.abs(var_Gamma[1, 1])) 
+    
+    if se_gamma == 0:
+        return 0, -2.86, True
 
-if __name__ == "__main__":
+    t_stat = Gamma[1] / se_gamma
     
-    # 1. Cargar Serie de Tiempo y Variables Fijas (Corregida la lectura del CSV)
-    datos = pd.read_csv("tserie.csv", header=None)
-    y_full = datos.iloc[:, 1].values
+    # Valores críticos aproximados Dickey-Fuller (sin tendencia, con constante)
+    crit_vals = {0.01: -3.43, 0.05: -2.86, 0.10: -2.57}
+    crit_val = crit_vals.get(alpha, -2.86)
     
-    train_size = 0.8
-    K_a = 72 # Debe coincidir con el usado en trn.py
+    is_stationary = t_stat < crit_val
+    return t_stat, crit_val, is_stationary
+
+def jarque_bera(e):
+    """
+    Test de Jarque-Bera para evaluar normalidad de los residuos.
+    Fórmulas: JB = (n/6) * (S^2 + 0.25*(K-3)^2)
+    Retorna: jb_stat, is_normal
+    """
+    n = len(e)
+    if n == 0: return 0, False
     
-    start_index = int(len(y_full) * train_size)
-    end_index = len(y_full)
+    mu = np.mean(e)
+    sigma = np.std(e)
     
-    t_test = np.arange(start_index, end_index)
-    y_true_test = y_full[start_index:end_index]
+    if sigma == 0: return 0, False
     
-    # 2. Cargar resultados previos (archivos ganadores)
-    adf_results = pd.read_csv("adf.csv")
-    d = int(adf_results['d'].values[0])
-    D = int(adf_results['D'].values[0])
-    s = int(adf_results['s'].values[0])
+    S = np.mean((e - mu)**3) / (sigma**3)
+    K = np.mean((e - mu)**4) / (sigma**4)
     
-    df_train = pd.read_csv("train.csv")
+    jb_stat = (n / 6.0) * (S**2 + 0.25 * (K - 3.0)**2)
+    # Valor crítico de Chi-cuadrado con 2 grados de libertad al 95% es 5.991
+    is_normal = jb_stat < 5.991
+    return jb_stat, is_normal
+
+def custom_acf(x, max_lag=None):
+    n = len(x)
+    if max_lag is None:
+        max_lag = min(40, max(1, n // 4)) # Límite dinámico basado en la cantidad de datos
     
-    # 3. Extraer parámetros SARIMA
-    row_sarima = df_train[df_train['modelo'] == 'SARIMA'].iloc[0]
-    eta_sarima = np.array(parse_list(row_sarima['eta']))
-    LA_sarima = parse_list(row_sarima['L_A'])
-    LM_sarima = parse_list(row_sarima['L_M'])
-    Gamma_sarima = np.array(parse_list(row_sarima['Gamma_hat_Phase1']))
-    
-    # 4. Extraer parámetros F-ARIMA
-    row_farima = df_train[df_train['modelo'] == 'FARIMA'].iloc[0]
-    T_p = float(row_farima['T_p'])
-    K_p = int(float(row_farima['K_p']))
-    gamma_fourier = np.array(parse_list(row_farima['gamma']))
-    
-    eta_farima = np.array(parse_list(row_farima['eta']))
-    LA_farima = parse_list(row_farima['L_A'])
-    LM_farima = parse_list(row_farima['L_M'])
-    Gamma_farima = np.array(parse_list(row_farima['Gamma_hat_Phase1']))
-    
-    # ---------------------------------------------------------
-    # 5. PREDICCIÓN SARIMA (One-Step-Ahead)
-    # ---------------------------------------------------------
-    # Preparar series auxiliares
-    w_true_sarima = diferenciar_serie_pad(y_full, d, D, s)
-    eps_true_sarima = calcular_residuos_empiricos(w_true_sarima, K_a, Gamma_sarima)
-    
-    y_pred_sarima = []
-    
-    for t in t_test:
-        w_hat_t = predecir_arima_step(w_true_sarima, eps_true_sarima, t, LA_sarima, LM_sarima, eta_sarima)
-        if np.isnan(w_hat_t):
-            y_pred_sarima.append(np.nan)
+    mu = np.mean(x)
+    var = np.var(x)
+    if var == 0: return np.zeros(max_lag + 1)
+        
+    acf = np.zeros(max_lag + 1)
+    for lag in range(max_lag + 1):
+        if lag == 0:
+            acf[lag] = 1.0
         else:
-            # Recuperar al dominio original
-            y_hat_t = recuperar_sarima(w_hat_t, y_full, t, d, D, s)
-            y_pred_sarima.append(y_hat_t)
+            if lag < n:
+                cov = np.sum((x[lag:] - mu) * (x[:-lag] - mu)) / n
+                acf[lag] = cov / var
+    return acf
+
+def es_ruido_blanco(e, max_lag=None):
+    N = len(e)
+    if N <= 1: return False
+    
+    if max_lag is None:
+        max_lag = min(40, max(1, N // 4))
+        
+    limite = 1.96 / np.sqrt(N)
+    lag_maximo = min(max_lag, N - 1)
+    acf_vals = custom_acf(e, max_lag=lag_maximo)
+    
+    for lag in range(1, len(acf_vals)):
+        if np.abs(acf_vals[lag]) > limite:
+            return False 
+    return True
+
+# =============================================================================
+# 3. MÉTTRICAS DE RENDIMIENTO Y CRITERIOS
+# =============================================================================
+
+def metricas_rendimiento(x_real, x_pred):
+    """
+    Retorna diccionario con MAE, RMSE, R2, MAPE, mNSE.
+    """
+    e = x_real - x_pred
+    
+    MAE = np.mean(np.abs(e))
+    MSE = np.mean(e**2)
+    RMSE = np.sqrt(MSE)
+    
+    with np.errstate(divide='ignore', invalid='ignore'):
+        mape_array = np.abs(e / x_real)
+        mape_array[~np.isfinite(mape_array)] = 0
+        MAPE = np.mean(mape_array)
+    
+    var_e = np.var(e)
+    var_y = np.var(x_real)
+    R2 = 1 - (var_e / var_y) if var_y != 0 else 0
+    
+    mean_x = np.mean(x_real)
+    numerador = np.sum(np.abs(e))
+    denominador = np.sum(np.abs(x_real - mean_x))
+    mNSE = 1 - (numerador / denominador) if denominador != 0 else 0
+    
+    return {'MAE': MAE, 'RMSE': RMSE, 'R2': R2, 'MAPE': MAPE, 'mNSE': mNSE}
+
+def calcular_aic(e, p, N):
+    """
+    Criterio de Información Akaike.
+    Fórmula: AIC = log(SSE) + 2(p+2) / (N-p-3)
+    """
+    SSE = np.sum(e**2)
+    if SSE <= 0:
+        SSE = 1e-10 # Prevenir log(0)
+        
+    denominador = (N - p - 3)
+    if denominador <= 0:
+        denominador = 1e-10 # Prevenir división por cero o negativa
+        
+    aic = np.log(SSE) + (2 * (p + 2)) / denominador
+    return aic
+
+# =============================================================================
+# 4. TRANSFORMACIONES Y RECUPERACIÓN (Dominio de Frecuencia y Tiempo)
+# =============================================================================
+
+def periodograma(x, fs=1):
+    """
+    Calcula el Periodograma para detectar frecuencias dominantes.
+    Solo retorna los Bins Positivos.
+    """
+    N = len(x)
+    X_k = np.fft.fft(x)
+    I_f = (1.0 / N) * (np.abs(X_k)**2)
+    
+    K = N // 2
+    f = np.arange(K + 1) * (fs / N)
+    I_f = I_f[:K + 1]
+    
+    return f, I_f
+
+def nCr(n, r):
+    """Coeficiente binomial (n sobre r)."""
+    if r < 0 or r > n: return 0
+    return math.factorial(n) // (math.factorial(r) * math.factorial(n-r))
+
+def recuperar_serie(w_t, y_hist, d, D, s):
+    """
+    Recupera el valor original usando el Teorema Binomial de Newton.
+    Fórmula: y_t = w_t - \sum_{i,j \neq 0,0} (-1)^{i+j} (d i) (D j) y_{t-i-js}
+    """
+    suma = 0.0
+    for i in range(d + 1):
+        for j in range(D + 1):
+            if i == 0 and j == 0:
+                continue 
             
-    y_pred_sarima = np.array(y_pred_sarima)
-    res_sarima = y_true_test - y_pred_sarima
-    
-    # ---------------------------------------------------------
-    # 6. PREDICCIÓN F-ARIMA (One-Step-Ahead)
-    # ---------------------------------------------------------
-    # Calcular base de Fourier para toda la serie
-    t_n_full = np.arange(len(y_full))
-    X_fourier = construir_matriz_fourier(t_n_full, T_p, K_p)
-    F_full = np.dot(X_fourier, gamma_fourier)
-    
-    # El residuo de Fourier es la serie a modelar con ARIMA(p,d,q)
-    residual_fourier = y_full - F_full
-    
-    # Corrección: Se usa solo d para alinearse con la integración residual del entrenamiento
-    w_true_farima = diferenciar_serie_pad(residual_fourier, d, 0, 0)
-    eps_true_farima = calcular_residuos_empiricos(w_true_farima, K_a, Gamma_farima)
-    
-    y_pred_farima = []
-    
-    for t in t_test:
-        eta_hat_t = predecir_arima_step(w_true_farima, eps_true_farima, t, LA_farima, LM_farima, eta_farima)
-        if np.isnan(eta_hat_t):
-            y_pred_farima.append(np.nan)
-        else:
-            # Corrección: Recuperar el residuo al dominio original usando solo d
-            residual_hat_t = recuperar_sarima(eta_hat_t, residual_fourier, t, d, 0, 0)
+            coef = ((-1)**(i + j)) * nCr(d, i) * nCr(D, j)
+            rezago = i + j * s
             
-            # Predicción Final = Componente Fourier + Componente Residual ARIMA
-            y_hat_t = F_full[t] + residual_hat_t
-            y_pred_farima.append(y_hat_t)
-            
-    y_pred_farima = np.array(y_pred_farima)
-    res_farima = y_true_test - y_pred_farima
-    
-    # ---------------------------------------------------------
-    # 7. EVALUACIÓN Y MÉTRICAS
-    # ---------------------------------------------------------
-    
-    # Filtrar NaNs para calcular métricas
-    mask_s = ~np.isnan(y_pred_sarima)
-    mask_f = ~np.isnan(y_pred_farima)
-    
-    metrics = {
-        'Modelo': ['SARIMA', 'FARIMA'],
-        'mNSE': [calc_mnse(y_true_test[mask_s], y_pred_sarima[mask_s]), 
-                 calc_mnse(y_true_test[mask_f], y_pred_farima[mask_f])],
-        'MAPE': [calc_mape(y_true_test[mask_s], y_pred_sarima[mask_s]), 
-                 calc_mape(y_true_test[mask_f], y_pred_farima[mask_f])],
-        'Jarque-Bera': [test_jarque_bera(res_sarima[mask_s]), 
-                        test_jarque_bera(res_farima[mask_f])]
-    }
-    
-    pd.DataFrame(metrics).to_csv("test.csv", index=False)
-    print("Evaluación finalizada. Métricas guardadas en test.csv")
-    print(pd.DataFrame(metrics))
-    
-    # ---------------------------------------------------------
-    # 8. GRÁFICAS DE RESULTADOS
-    # ---------------------------------------------------------
-    
-    # Gráfica 1: Curvas Comparativas
-    plt.figure(figsize=(14, 6))
-    plt.plot(t_test, y_true_test, label='Valor Real', color='black', linewidth=2)
-    plt.plot(t_test, y_pred_sarima, label='Predicción SARIMA', linestyle='--')
-    plt.plot(t_test, y_pred_farima, label='Predicción F-ARIMA', linestyle='-.')
-    plt.title("Pronóstico One-Step-Ahead: Valor Estimado vs Valor Real")
-    plt.xlabel("Índice Temporal (Test)")
-    plt.ylabel("Valor")
-    plt.legend()
-    plt.grid(True)
-    plt.savefig("predicciones.png")
-    plt.show()
-    
-    # Gráfica 2: Función de Autocorrelación (ACF) de los residuos
-    lags = 20
-    acf_sarima = calc_acf(res_sarima[mask_s], lags)
-    acf_farima = calc_acf(res_farima[mask_f], lags)
-    lag_indices = np.arange(lags + 1)
-    
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-    
-    axes[0].bar(lag_indices, acf_sarima, width=0.3, color='blue')
-    axes[0].axhline(0, color='black', linewidth=1)
-    axes[0].axhline(1.96/np.sqrt(len(res_sarima[mask_s])), color='red', linestyle='--')
-    axes[0].axhline(-1.96/np.sqrt(len(res_sarima[mask_s])), color='red', linestyle='--')
-    axes[0].set_title("ACF Residuos SARIMA")
-    
-    axes[1].bar(lag_indices, acf_farima, width=0.3, color='green')
-    axes[1].axhline(0, color='black', linewidth=1)
-    axes[1].axhline(1.96/np.sqrt(len(res_farima[mask_f])), color='red', linestyle='--')
-    axes[1].axhline(-1.96/np.sqrt(len(res_farima[mask_f])), color='red', linestyle='--')
-    axes[1].set_title("ACF Residuos F-ARIMA")
-    
-    plt.savefig("acf_residuos.png")
-    plt.show()
+            if rezago <= len(y_hist):
+                # Extraer el valor histórico contando hacia atrás
+                suma += coef * y_hist[-rezago]
+                
+    y_t = w_t - suma
+    return y_t
