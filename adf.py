@@ -15,45 +15,34 @@ def ejecutar_test_adf(serie, max_lag, alpha):
 
     n_samples = len(y) - 1 - max_lag
 
-    # Si la serie es demasiado corta tras los rezagos, forzamos un valor no estacionario
     if n_samples <= 0:
         return 1.0, -2.86
 
     Y = dy[max_lag:]
     X = np.zeros((n_samples, 2 + max_lag))
 
-    # Construcción de la matriz de diseño X
-    X[:, 0] = y[max_lag : -1]   # Variable rezagada y_{t-1}
+    X[:, 0] = y[max_lag : -1]   # y_{t-1}
     X[:, 1] = 1.0               # Constante
 
     for i in range(max_lag):
-        X[:, 2 + i] = dy[max_lag - 1 - i : -1 - i]   # Rezagos de las diferencias
+        X[:, 2 + i] = dy[max_lag - 1 - i : -1 - i]
 
-    # Estimación vía Pseudo-inversa por SVD: V * S^-1 * U^T
+    # Aplicación de OLS explícito según requerimiento: (X^T X)^-1 X^T Y
     try:
-        U, S, VT = np.linalg.svd(X, full_matrices=False)
-
-        S_inv = np.where(S > 1e-10, 1.0 / S, 0.0)
-        X_pinv = np.dot(VT.T, np.dot(np.diag(S_inv), U.T))
-        beta = np.dot(X_pinv, Y)
-
-        S_inv2 = np.where(S > 1e-10, 1.0 / (S**2), 0.0)
-        XTX_inv = np.dot(VT.T, np.dot(np.diag(S_inv2), VT))
+        XTX = np.dot(X.T, X)
+        XTX_inv = np.linalg.inv(XTX)
+        beta = np.dot(XTX_inv, np.dot(X.T, Y))
     except np.linalg.LinAlgError:
         return 1.0, -2.86
 
-    # Residuos y grados de libertad
     e = Y - np.dot(X, beta)
     df = n_samples - (2 + max_lag)
 
     if df <= 0:
         return 1.0, -2.86
 
-    # Varianza y matriz de covarianza
     sigma2 = np.sum(e**2) / df
     cov_matrix = sigma2 * XTX_inv
-
-    # Error estándar del coeficiente gamma (ubicado en beta[0])
     se_gamma = np.sqrt(cov_matrix[0, 0])
 
     if se_gamma == 0:
@@ -61,100 +50,70 @@ def ejecutar_test_adf(serie, max_lag, alpha):
 
     t_stat = beta[0] / se_gamma
 
-    # Mapeo manual de valores críticos (Dickey-Fuller aproximado con constante)
-    if alpha <= 0.01:
-        cv = -3.43
-    elif alpha <= 0.05:
-        cv = -2.86
-    else:
-        cv = -2.57
+    cv = -3.43 if alpha <= 0.01 else (-2.86 if alpha <= 0.05 else -2.57)
 
     return t_stat, cv
 
 # =============================================================================
-# 2. FUNCIONES DE DIFERENCIACIÓN
+# 2. FUNCIONES DE DIFERENCIACIÓN (Operadores L)
 # =============================================================================
 
-def diferenciar_ordinaria(serie):
-    """(1 - L)y_t = y_t - y_{t-1}"""
-    return np.diff(serie, n=1)
+def diferenciar_ordinaria(y):
+    """nabla^d y_t = y_t - y_{t-1}"""
+    return np.diff(y, n=1)
 
-def diferenciar_estacional(serie, s):
-    """(1 - L^s)y_t = y_t - y_{t-s}"""
-    return serie[s:] - serie[:-s]
+def diferenciar_estacional(y, s):
+    """nabla_s^D y_t = y_t - y_{t-s}"""
+    return y[s:] - y[:-s]
 
 # =============================================================================
-# 3. LÓGICA PRINCIPAL DE INTEGRACIÓN
+# 3. LÓGICA DE INTEGRACIÓN (Cumplimiento de requerimientos)
 # =============================================================================
 
 def buscar_ordenes_integracion(serie, s, alpha=0.05, max_lag=30):
     historial = []
-    d = 0
-    D = 0
-    y_ord = np.array(serie)
-    
-    # PASO 1: Determinar orden ordinario 'd' sobre la serie original
-    t_stat_d, cv_d = ejecutar_test_adf(y_ord, max_lag, alpha)
-    if t_stat_d > cv_d:
-        d = 1
-        # Si la tendencia es altamente cuadrática, aquí se podría evaluar d=2 con np.diff()
-        
-    historial.append({
-        'etapa': 'ordinaria', 'orden': d,
-        't_stat': round(t_stat_d, 4), 'valor_critico': cv_d,
-        'es_estacionaria': bool(t_stat_d <= cv_d)
-    })
+    y_current = np.array(serie)
+    d, D = 0, 0
 
-    # PASO 2: Determinar orden estacional 'D' aislando los ciclos
-    # Evaluamos la estacionalidad extrayendo puntos cada 's' muestras (aislamiento de fase)
-    # Esto evita el falso positivo del test estándar tras una diferenciación ordinaria.
-    y_seasonal = y_ord[::s]
-    t_stat_D, cv_D = ejecutar_test_adf(y_seasonal, max_lag=min(max_lag, len(y_seasonal)//2 - 1), alpha=alpha)
+    # PASO 1: Determinar D (Diferenciación estacional) - Requiere usar nabla_s
+    # El taller exige aplicar el operador de diferencia estacional
+    y_seasonal = diferenciar_estacional(y_current, s)
+    t_stat_D, cv_D = ejecutar_test_adf(y_seasonal, max_lag, alpha)
     
-    if t_stat_D > cv_D:
+    if t_stat_D <= cv_D:
         D = 1
-        
+        y_current = y_seasonal
+    
     historial.append({
         'etapa': 'estacional', 'orden': D,
         't_stat': round(t_stat_D, 4), 'valor_critico': cv_D,
         'es_estacionaria': bool(t_stat_D <= cv_D)
     })
+
+    # PASO 2: Determinar d (Diferenciación ordinaria)
+    t_stat_d, cv_d = ejecutar_test_adf(y_current, max_lag, alpha)
+    if t_stat_d <= cv_d:
+        d = 0
+    else:
+        d = 1
+        y_current = diferenciar_ordinaria(y_current)
+
+    historial.append({
+        'etapa': 'ordinaria', 'orden': d,
+        't_stat': round(t_stat_d, 4), 'valor_critico': cv_d,
+        'es_estacionaria': bool(t_stat_d <= cv_d)
+    })
     
     return d, D, historial
 
-# =============================================================================
-# 4. EJECUCIÓN PRINCIPAL
-# =============================================================================
-
 if __name__ == "__main__":
-    data_path   = "tserie.csv"
-    output_path = "adf.csv"
-
-    # Parámetros fijos de configuración para la búsqueda
-    alpha   = 0.05
-    max_lag = 30
-    s       = 24
-
-    # Leer datos
-    datos = pd.read_csv(data_path, header=None)
+    # Configuración según requerimientos
+    datos = pd.read_csv("tserie.csv", header=None)
     serie = datos.iloc[:, 1].values
+    s = 24  # Valor típico para datos horarios según SARIMA.pdf
 
-    # Ejecutar búsqueda de órdenes
-    d, D, historial = buscar_ordenes_integracion(serie, s, alpha, max_lag)
+    d, D, historial = buscar_ordenes_integracion(serie, s)
 
-    # ------------------------------------------------------------------
-    # CORRECCIÓN: adf.csv ahora incluye los estadísticos intermedios de
-    # cada iteración además de los órdenes finales d, D, s.
-    # Esto cumple el requerimiento del taller de reportar resultados
-    # parciales de cada etapa.
-    # ------------------------------------------------------------------
     df_hist = pd.DataFrame(historial)
-    df_hist['d_final'] = d
-    df_hist['D_final'] = D
-    df_hist['s']       = s
-
-    df_hist.to_csv(output_path, index=False)
-
-    print(f"Órdenes de integración calculados: d={d}, D={D}")
-    print(f"Resultados guardados en {output_path}")
-    print(df_hist.to_string(index=False))
+    df_hist.to_csv("adf.csv", index=False)
+    print(f"Órdenes calculados: d={d}, D={D}")
