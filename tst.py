@@ -49,27 +49,40 @@ def diferenciar_serie_pad(y, d, D, s):
 
     return w
 
-def calcular_residuos_empiricos(w, K_a, Gamma):
-    """
-    Calcula los residuos empíricos epsilon_hat para toda la serie.
-    Fórmula: epsilon_t = w_t - sum_{j=1}^{K_a} Gamma_j * w_{t-j}
-
-    CORRECCIÓN: la ventana de verificación NaN era w[t-Ka : t+1], que
-    incluía w[t] (el valor objetivo). Solo deben verificarse los K_a
-    regresores pasados w[t-Ka : t]. Incluir w[t] recortaba
-    innecesariamente el rango útil de épsilons cuando w[t] era NaN.
-    """
-    epsilon = np.full_like(w, np.nan)
-    if len(Gamma) == 0:
-        return epsilon
-
-    for t in range(K_a, len(w)):
-        # Verificar solo la ventana de regresores pasados, sin incluir w[t]
-        if not np.isnan(w[t - K_a : t]).any() and not np.isnan(w[t]):
-            z_t = w[t - K_a : t][::-1]   # [w_{t-1}, w_{t-2}, ..., w_{t-Ka}]
-            epsilon[t] = w[t] - np.dot(z_t, Gamma)
-
-    return epsilon
+def calcular_residuos_empiricos(w, K_a):
+    # Aislar dinámicamente el inicio de los datos válidos tras diferenciaciones
+    valid_indices = np.where(~np.isnan(w))[0]
+    if len(valid_indices) == 0:
+        raise ValueError("La serie diferenciada w contiene únicamente valores NaN.")
+        
+    start_idx = valid_indices[0]
+    w_valid = w[start_idx:]
+    T_valid = len(w_valid)
+    
+    if T_valid <= K_a:
+        raise ValueError(f"Faltan grados de libertad. Longitud válida ({T_valid}) <= K_a ({K_a}).")
+    
+    # Construcción Vectorizada de la Matriz Z (Fase I)
+    Z = []
+    W_target = []
+    for t in range(K_a, T_valid):
+        Z.append(w_valid[t - K_a : t][::-1]) 
+        W_target.append(w_valid[t])
+        
+    Z = np.array(Z)
+    W_target = np.array(W_target)
+    
+    # Estimación OLS de innovaciones iniciales
+    Gamma_hat = np.linalg.pinv(Z.T @ Z) @ Z.T @ W_target
+    
+    # Cálculo del residuo: epsilon_hat_t = w_t - z_t^T Gamma_hat
+    epsilon_hat_valid = W_target - (Z @ Gamma_hat)
+    
+    # Reconstrucción del vector original mapeando los NaNs estructurales
+    epsilon_hat = np.full(len(w), np.nan)
+    epsilon_hat[start_idx + K_a : ] = epsilon_hat_valid
+    
+    return epsilon_hat, Gamma_hat
 
 def construir_matriz_fourier(t_n, T_p, K_p):
     """Construye la matriz de diseño de Fourier para toda la serie temporal."""
