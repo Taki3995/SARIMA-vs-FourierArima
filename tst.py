@@ -49,7 +49,12 @@ def diferenciar_serie_pad(y, d, D, s):
 
     return w
 
-def calcular_residuos_empiricos(w, K_a):
+def calcular_residuos_empiricos(w, K_a, Gamma_hat_trained):
+    """
+    CORRECCIÓN: En la fase de testeo, no se re-estiman los coeficientes.
+    Se utiliza el Gamma_hat_trained obtenido en el entrenamiento para 
+    calcular los residuos estrictamente: epsilon_hat_t = w_t - z_t^T * Gamma.
+    """
     # Aislar dinámicamente el inicio de los datos válidos tras diferenciaciones
     valid_indices = np.where(~np.isnan(w))[0]
     if len(valid_indices) == 0:
@@ -72,17 +77,14 @@ def calcular_residuos_empiricos(w, K_a):
     Z = np.array(Z)
     W_target = np.array(W_target)
     
-    # Estimación OLS de innovaciones iniciales
-    Gamma_hat = np.linalg.pinv(Z.T @ Z) @ Z.T @ W_target
-    
-    # Cálculo del residuo: epsilon_hat_t = w_t - z_t^T Gamma_hat
-    epsilon_hat_valid = W_target - (Z @ Gamma_hat)
+    # Cálculo del residuo usando el Gamma_hat pre-entrenado
+    epsilon_hat_valid = W_target - (Z @ Gamma_hat_trained)
     
     # Reconstrucción del vector original mapeando los NaNs estructurales
     epsilon_hat = np.full(len(w), np.nan)
     epsilon_hat[start_idx + K_a : ] = epsilon_hat_valid
     
-    return epsilon_hat, Gamma_hat
+    return epsilon_hat
 
 def construir_matriz_fourier(t_n, T_p, K_p):
     """Construye la matriz de diseño de Fourier para toda la serie temporal."""
