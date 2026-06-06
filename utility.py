@@ -1,222 +1,232 @@
 import numpy as np
-import math
+import pandas as pd
+import matplotlib.pyplot as plt
 
 # =============================================================================
-# 1. ESTIMADORES MATRICIALES (SVD y OLS)
+# 1. FUNCIONES MATEMÁTICAS AUXILIARES (Sin módulo math)
 # =============================================================================
 
-def pinv_svd(A):
-    """
-    Calcula la matriz Pseudo-Inversa usando SVD para evitar singularidades.
-    Fórmula: A^{-1} = V \times S^{-1} \times U^T
-    """
-    U, S, Vh = np.linalg.svd(A, full_matrices=False)
-    
-    tol = np.max(S) * 1e-15
-    S_inv = np.array([1/s if s > tol else 0 for s in S])
-    
-    invA = Vh.T @ np.diag(S_inv) @ U.T
-    return invA
+def factorial(n):
+    """Calcula el factorial de un número entero."""
+    if n == 0 or n == 1:
+        return 1
+    res = 1
+    for i in range(2, int(n) + 1):
+        res *= i
+    return res
 
-def ols_estimate(X, Y, lam=0.0):
-    """
-    Estimación OLS-Penalizado (Ridge) o Mínimos Cuadrados Ordinarios.
-    Fórmula: \hat{\Gamma} = (X^T X + \lambda I)^{-1} X^T Y
-    """
-    I = np.eye(X.shape[1])
-    A = (X.T @ X) + (lam * I)
-    invA = pinv_svd(A)
-    Gamma_hat = invA @ X.T @ Y
-    return Gamma_hat
+def combinatoria(n, k):
+    """Calcula el coeficiente binomial (n sobre k)."""
+    if k < 0 or k > n:
+        return 0
+    return factorial(n) // (factorial(k) * factorial(n - k))
 
 # =============================================================================
-# 2. DIAGNÓSTICO ESTADÍSTICO (ADF, Jarque-Bera, ACF, Ruido Blanco)
+# 2. FUNCIONES F-ARIMA
 # =============================================================================
 
-def custom_adf(y, alpha=0.05):
+def periodograma(x, f_s=1.0):
     """
-    Implementación manual del Test Dickey-Fuller Aumentado con rezago 1.
-    Retorna: t_stat, crit_val, is_stationary
-    """
-    dy = np.diff(y)
-    y_lag = y[:-1]
-    
-    dy_t = dy[1:]
-    y_lag_1 = y_lag[1:]
-    dy_lag = dy[:-1]
-    
-    N = len(dy_t)
-    X = np.column_stack((np.ones(N), y_lag_1, dy_lag))
-    
-    Gamma = ols_estimate(X, dy_t)
-    
-    e = dy_t - (X @ Gamma)
-    grados_libertad = N - X.shape[1]
-    
-    # Manejo de varianza cero para evitar divisiones inválidas
-    sigma2 = np.sum(e**2) / grados_libertad
-    if sigma2 == 0:
-        return 0, -2.86, True
-
-    var_Gamma = sigma2 * pinv_svd(X.T @ X)
-    se_gamma = np.sqrt(np.abs(var_Gamma[1, 1])) 
-    
-    if se_gamma == 0:
-        return 0, -2.86, True
-
-    t_stat = Gamma[1] / se_gamma
-    
-    # Valores críticos aproximados Dickey-Fuller (sin tendencia, con constante)
-    crit_vals = {0.01: -3.43, 0.05: -2.86, 0.10: -2.57}
-    crit_val = crit_vals.get(alpha, -2.86)
-    
-    is_stationary = t_stat < crit_val
-    return t_stat, crit_val, is_stationary
-
-def jarque_bera(e):
-    """
-    Test de Jarque-Bera para evaluar normalidad de los residuos.
-    Fórmulas: JB = (n/6) * (S^2 + 0.25*(K-3)^2)
-    Retorna: jb_stat, is_normal
-    """
-    n = len(e)
-    if n == 0: return 0, False
-    
-    mu = np.mean(e)
-    sigma = np.std(e)
-    
-    if sigma == 0: return 0, False
-    
-    S = np.mean((e - mu)**3) / (sigma**3)
-    K = np.mean((e - mu)**4) / (sigma**4)
-    
-    jb_stat = (n / 6.0) * (S**2 + 0.25 * (K - 3.0)**2)
-    # Valor crítico de Chi-cuadrado con 2 grados de libertad al 95% es 5.991
-    is_normal = jb_stat < 5.991
-    return jb_stat, is_normal
-
-def custom_acf(x, max_lag=None):
-    n = len(x)
-    if max_lag is None:
-        max_lag = min(40, max(1, n // 4)) # Límite dinámico basado en la cantidad de datos
-    
-    mu = np.mean(x)
-    var = np.var(x)
-    if var == 0: return np.zeros(max_lag + 1)
-        
-    acf = np.zeros(max_lag + 1)
-    for lag in range(max_lag + 1):
-        if lag == 0:
-            acf[lag] = 1.0
-        else:
-            if lag < n:
-                cov = np.sum((x[lag:] - mu) * (x[:-lag] - mu)) / n
-                acf[lag] = cov / var
-    return acf
-
-def es_ruido_blanco(e, max_lag=None):
-    N = len(e)
-    if N <= 1: return False
-    
-    if max_lag is None:
-        max_lag = min(40, max(1, N // 4))
-        
-    limite = 1.96 / np.sqrt(N)
-    lag_maximo = min(max_lag, N - 1)
-    acf_vals = custom_acf(e, max_lag=lag_maximo)
-    
-    for lag in range(1, len(acf_vals)):
-        if np.abs(acf_vals[lag]) > limite:
-            return False 
-    return True
-
-# =============================================================================
-# 3. MÉTTRICAS DE RENDIMIENTO Y CRITERIOS
-# =============================================================================
-
-def metricas_rendimiento(x_real, x_pred):
-    """
-    Retorna diccionario con MAE, RMSE, R2, MAPE, mNSE.
-    """
-    e = x_real - x_pred
-    
-    MAE = np.mean(np.abs(e))
-    MSE = np.mean(e**2)
-    RMSE = np.sqrt(MSE)
-    
-    with np.errstate(divide='ignore', invalid='ignore'):
-        mape_array = np.abs(e / x_real)
-        mape_array[~np.isfinite(mape_array)] = 0
-        MAPE = np.mean(mape_array)
-    
-    var_e = np.var(e)
-    var_y = np.var(x_real)
-    R2 = 1 - (var_e / var_y) if var_y != 0 else 0
-    
-    mean_x = np.mean(x_real)
-    numerador = np.sum(np.abs(e))
-    denominador = np.sum(np.abs(x_real - mean_x))
-    mNSE = 1 - (numerador / denominador) if denominador != 0 else 0
-    
-    return {'MAE': MAE, 'RMSE': RMSE, 'R2': R2, 'MAPE': MAPE, 'mNSE': mNSE}
-
-def calcular_aic(e, p, N):
-    """
-    Criterio de Información Akaike.
-    Fórmula: AIC = log(SSE) + 2(p+2) / (N-p-3)
-    """
-    SSE = np.sum(e**2)
-    if SSE <= 0:
-        SSE = 1e-10 # Prevenir log(0)
-        
-    denominador = (N - p - 3)
-    if denominador <= 0:
-        denominador = 1e-10 # Prevenir división por cero o negativa
-        
-    aic = np.log(SSE) + (2 * (p + 2)) / denominador
-    return aic
-
-# =============================================================================
-# 4. TRANSFORMACIONES Y RECUPERACIÓN (Dominio de Frecuencia y Tiempo)
-# =============================================================================
-
-def periodograma(x, fs=1):
-    """
-    Calcula el Periodograma para detectar frecuencias dominantes.
-    Solo retorna los Bins Positivos.
+    Calcula el Periodograma de una serie de tiempo.
+    Fórmula: I(f_k) = (1/N) * |X[k]|^2, f_k = k * f_s / N
+    Bins de frecuencia positivos: K = floor(N/2)
     """
     N = len(x)
     X_k = np.fft.fft(x)
-    I_f = (1.0 / N) * (np.abs(X_k)**2)
-    
-    K = N // 2
-    f = np.arange(K + 1) * (fs / N)
-    I_f = I_f[:K + 1]
-    
-    return f, I_f
+    I_fk = (1 / N) * (np.abs(X_k)**2)
+    K = int(np.floor(N / 2))
+    f_k = (np.arange(K + 1) * f_s) / N
+    return f_k, I_fk[:K + 1]
 
-def nCr(n, r):
-    """Coeficiente binomial (n sobre r)."""
-    if r < 0 or r > n: return 0
-    return math.factorial(n) // (math.factorial(r) * math.factorial(n-r))
-
-def recuperar_serie(w_t, y_hist, d, D, s):
+def estimar_gamma_farima(X, Y, lam):
     """
-    Recupera el valor original usando el Teorema Binomial de Newton.
-    Fórmula: y_t = w_t - \sum_{i,j \neq 0,0} (-1)^{i+j} (d i) (D j) y_{t-i-js}
+    Estima los coeficientes de Fourier por OLS-Penalizado.
+    Fórmula: Gamma_hat = (X^T X + lambda I)^-1 X^T Y
+    Usa np.linalg.solve en lugar de inv para mayor estabilidad numérica.
+    """
+    I = np.eye(X.shape[1])
+    A = np.dot(X.T, X) + lam * I   # (X^T X + lambda I)
+    b = np.dot(X.T, Y)              # X^T Y
+    # CORRECCIÓN 1: solve(A, b) es más estable que inv(A) @ b
+    gamma_hat = np.linalg.solve(A, b)
+    return gamma_hat
+
+# =============================================================================
+# 3. FUNCIONES SARIMA
+# =============================================================================
+
+def estimar_eta_sarima(X_t_array, w_array, lam):
+    """
+    Estima la representación lineal expandida (Fase II) vía OLS Regularizado (Ridge).
+    Fórmula: eta_hat = (sum X_t X_t^T + lambda I)^-1 (sum X_t w_t)
+    """
+    if len(X_t_array) == 0:
+        return None
+
+    m = len(X_t_array[0])
+
+    sum_XX = np.zeros((m, m))
+    sum_Xw = np.zeros(m)
+
+    for t in range(len(X_t_array)):
+        X_t = np.array(X_t_array[t])   # vector 1-D de dimensión m
+        w_t = w_array[t]
+        sum_XX += np.outer(X_t, X_t)   # X_t X_t^T
+        sum_Xw += X_t * w_t            # X_t w_t
+
+    try:
+        I = np.eye(m)
+        # CORRECCIÓN 1 (aplicada también aquí): solve en vez de inv
+        eta_hat = np.linalg.solve(sum_XX + lam * I, sum_Xw)
+    except np.linalg.LinAlgError:
+        return None
+
+    return eta_hat  # vector 1-D de dimensión m
+
+def recuperar_sarima(w_t, y_past, t, d, D, s):
+    """
+    Recupera el valor original y_t usando el Teorema del Binomio de Newton.
+    Fórmula: y_t = w_t - sum_{i=0..d, j=0..D, (i,j)!=(0,0)}
+                         (-1)^{i+j} * C(d,i) * C(D,j) * y_{t-i-j*s}
+
+    CORRECCIÓN 2: se verifica que idx_pasado sea un índice válido antes de
+    acceder a y_past. Si el índice está fuera de rango la recuperación no es
+    posible y se devuelve np.nan en lugar de silenciar el error con 0.0.
     """
     suma = 0.0
-    for i in range(d + 1):
-        for j in range(D + 1):
+    for i in range(int(d) + 1):
+        for j in range(int(D) + 1):
             if i == 0 and j == 0:
-                continue 
-            
-            coef = ((-1)**(i + j)) * nCr(d, i) * nCr(D, j)
-            rezago = i + j * s
-            
-            if rezago <= len(y_hist):
-                # Extraer el valor histórico contando hacia atrás
-                suma += coef * y_hist[-rezago]
-                
-    y_t = w_t - suma
-    return y_t
+                continue
+
+            signo   = (-1) ** (i + j)
+            coef_d  = combinatoria(d, i)
+            coef_D  = combinatoria(D, j)
+            idx_pasado = t - i - j * int(s)
+
+            # CORRECCIÓN 2: índice inválido → resultado indefinido
+            if isinstance(y_past, dict):
+                if idx_pasado not in y_past:
+                    return np.nan
+                y_val = y_past[idx_pasado]
+            else:
+                if idx_pasado < 0 or idx_pasado >= len(y_past):
+                    return np.nan
+                y_val = y_past[idx_pasado]
+
+            suma += signo * coef_d * coef_D * y_val
+
+    return w_t - suma
+
+# =============================================================================
+# 4. MÉTRICAS Y TESTS ESTADÍSTICOS
+# =============================================================================
+
+def calc_mnse(real, pred):
+    """
+    Calcula la Eficiencia de Nash-Sutcliffe Modificada (mNSE).
+    Fórmula: mNSE = 1 - ( sum(|e_n|) / sum(|x_n - mean(x)|) )
+    Sin cambios — implementación ya era correcta.
+    """
+    real = np.array(real)
+    pred = np.array(pred)
+    numerador   = np.sum(np.abs(real - pred))
+    denominador = np.sum(np.abs(real - np.mean(real)))
+    if denominador == 0:
+        return np.nan
+    return 1.0 - (numerador / denominador)
+
+def calc_mape(real, pred):
+    """
+    Calcula el Error Porcentual Absoluto Medio (MAPE).
+    Fórmula del taller: MAPE = mean(|e(n)/x(n)|)
+
+    CORRECCIÓN 3: se devuelve el valor en fracción (0..1) tal como
+    define la fórmula del taller. Si se desea expresar en porcentaje
+    multiplicar el resultado por 100 al reportar, no aquí.
+    El comentario anterior que decía "se elimina el multiplicador
+    porcentual innecesario" era correcto matemáticamente pero causaba
+    confusión. El valor 1.0 significa 100% de error.
+    """
+    real = np.array(real)
+    pred = np.array(pred)
+    mask = real != 0
+    real_safe = real[mask]
+    pred_safe = pred[mask]
+    n = len(real_safe)
+    if n == 0:
+        return np.nan
+    return (1.0 / n) * np.sum(np.abs((real_safe - pred_safe) / real_safe))
+
+def test_jarque_bera(residuos):
+    """
+    Calcula el estadístico de Jarque-Bera y evalúa la normalidad.
+    Fórmulas:
+      S  = m3 / m2^(3/2)          (asimetría muestral)
+      K  = m4 / m2^2               (curtosis muestral)
+      JB = (N/6) * (S^2 + (K-3)^2/4)
+
+    CORRECCIÓN 4: se devuelve un dict con el estadístico, el valor
+    crítico chi²(2, alpha=0.05) = 5.991 y la conclusión, en lugar de
+    solo el número. Esto cumple el objetivo del taller de "evaluar la
+    significancia estadística".
+    """
+    res = np.array(residuos)
+    n = len(res)
+    if n == 0:
+        return {'jb_stat': np.nan, 'critico_5pct': 5.991,
+                'rechaza_H0': None, 'conclusion': 'Sin datos'}
+
+    media = np.mean(res)
+    m2 = np.sum((res - media) ** 2) / n
+    m3 = np.sum((res - media) ** 3) / n
+    m4 = np.sum((res - media) ** 4) / n
+
+    if m2 == 0:
+        return {'jb_stat': np.nan, 'critico_5pct': 5.991,
+                'rechaza_H0': None, 'conclusion': 'Varianza cero'}
+
+    S  = m3 / (m2 ** 1.5)
+    K  = m4 / (m2 ** 2)
+    jb = (n / 6.0) * (S ** 2 + ((K - 3.0) ** 2) / 4.0)
+
+    critico = 5.991          # chi²(2, alpha=0.05)
+    rechaza = bool(jb > critico)
+    conclusion = ('Residuos NO normales (se rechaza H0)'
+                  if rechaza else
+                  'Residuos normales (no se rechaza H0)')
+
+    return {
+        'jb_stat'     : float(jb),
+        'critico_5pct': critico,
+        'rechaza_H0'  : rechaza,
+        'conclusion'  : conclusion
+    }
+
+def calc_acf(residuos, lags):
+    """
+    Calcula la Función de Autocorrelación (ACF).
+    Fórmula: r_k = cov_k / var_total
+      donde cov_k = sum_{t=0}^{n-k-1} (y_t - media)(y_{t+k} - media)
+            var_total = sum_{t=0}^{n-1}  (y_t - media)^2
+
+    La implementación ya era matemáticamente correcta para la fórmula
+    del taller. Sin cambios.
+    """
+    res   = np.array(residuos)
+    n     = len(res)
+    media = np.mean(res)
+    var_total = np.sum((res - media) ** 2)
+
+    if var_total == 0:
+        return np.zeros(lags + 1)
+
+    acf_vals = []
+    for k in range(lags + 1):
+        if k == 0:
+            acf_vals.append(1.0)
+        else:
+            cov_k = np.sum((res[:n - k] - media) * (res[k:] - media))
+            acf_vals.append(cov_k / var_total)
+
+    return np.array(acf_vals)
