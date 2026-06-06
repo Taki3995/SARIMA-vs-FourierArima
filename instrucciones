@@ -199,6 +199,3 @@ Reportar mNSE y MAPE.
 3 xxx: nombre del archivo de salida.
 4 Archivos configuración: (adf ,train,test).csv (debe tener los mejores parametros encontrados, metricas, etc.) 
 5 Fuentes: adf.py, trn.py, tst.py, utility.py.
-
-8. otros
-ningún valor o variable, maximo, minimo, techo etc debe estar hardcodeado, todo debe calcularse con el codigo. 
